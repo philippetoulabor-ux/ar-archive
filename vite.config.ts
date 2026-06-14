@@ -47,6 +47,7 @@ function usdzQuickLookPlugin(): Plugin {
 }
 
 export default defineConfig({
+  base: '/ar-archive/',
   plugins: [basicSsl(), usdzQuickLookPlugin()],
   preview: {
     host: true,

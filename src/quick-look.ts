@@ -1,4 +1,6 @@
-const POSTER = '/ar-poster.png'
+import { asset } from './assets.ts'
+
+const POSTER = asset('ar-poster.png')
 
 export function toAbsoluteUrl(path: string): string {
   return new URL(path, window.location.href).href

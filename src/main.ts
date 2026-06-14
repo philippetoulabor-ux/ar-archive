@@ -1,4 +1,5 @@
 import './style.css'
+import { asset } from './assets.ts'
 import { detectARMode, hintForMode, type ARMode, type CapturePhase } from './ar-capabilities.ts'
 import { CameraARViewer } from './camera-ar.ts'
 import { downloadBlob } from './capture.ts'
@@ -45,11 +46,11 @@ app.innerHTML = `
         <h1 class="hud-title" id="model-title">${models[0]!.name}</h1>
         <a
           rel="ar"
-          href="/models/astronaut.usdz"
+          href="${asset('models/astronaut.usdz')}"
           class="hud-mode hud-quick-look hidden"
           id="hud-quick-look"
         >
-          <img src="/ar-poster.png" alt="In AR ansehen" width="48" height="48" />
+          <img src="${asset('ar-poster.png')}" alt="In AR ansehen" width="48" height="48" />
         </a>
         <button type="button" class="hud-mode hidden" id="hud-webxr">
           ↗ Raum-AR starten

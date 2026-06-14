@@ -1,3 +1,5 @@
+import { asset } from './assets.ts'
+
 export interface ModelAsset {
   id: string
   name: string
@@ -12,13 +14,13 @@ export const models: ModelAsset[] = [
     id: 'robot',
     name: 'Robot',
     description: 'Kleines Testmodell — lädt schnell auf dem Handy.',
-    glb: '/models/robot.glb',
+    glb: asset('models/robot.glb'),
   },
   {
     id: 'astronaut',
     name: 'Astronaut',
     description: 'Demo-Modell mit voller AR-Unterstützung (iOS + Android).',
-    glb: '/models/astronaut.glb',
-    usdz: '/models/astronaut.usdz',
+    glb: asset('models/astronaut.glb'),
+    usdz: asset('models/astronaut.usdz'),
   },
 ]
