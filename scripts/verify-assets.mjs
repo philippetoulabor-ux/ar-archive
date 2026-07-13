@@ -5,9 +5,17 @@ const root = join(import.meta.dirname, '..')
 const modelsDir = join(root, 'public', 'models')
 
 const assets = [
-  { file: 'astronaut.glb', minBytes: 100_000, type: 'glb' },
-  { file: 'astronaut.usdz', minBytes: 100_000, type: 'usdz' },
-  { file: 'robot.glb', minBytes: 10_000, type: 'glb' },
+  { file: 'middleman.glb', minBytes: 10_000, type: 'glb' },
+  { file: 'ls-candle.glb', minBytes: 10_000, type: 'glb' },
+  { file: 'alien-chair.glb', minBytes: 10_000, type: 'glb' },
+  { file: 'x-bock-couch.glb', minBytes: 10_000, type: 'glb' },
+  { file: 'weblampe.glb', minBytes: 10_000, type: 'glb' },
+  { file: 'speaker-module.glb', minBytes: 10_000, type: 'glb' },
+  { file: 'glowing-puppe.glb', minBytes: 10_000, type: 'glb' },
+  { file: 'grillz-poster.glb', minBytes: 10_000, type: 'glb' },
+  { file: 'laptop.glb', minBytes: 10_000, type: 'glb' },
+  { file: 'regalbretter.glb', minBytes: 10_000, type: 'glb' },
+  { file: 'regal-bild.glb', minBytes: 10_000, type: 'glb' },
 ]
 
 let failed = false
@@ -41,9 +49,9 @@ for (const asset of assets) {
 
 console.log('')
 console.log('Device test checklist (manual):')
-console.log('  [ ] iPhone/iPad: https://<your-ip>:5173 → Astronaut → In AR ansehen → Quick Look')
-console.log('  [ ] Android:     https://<your-ip>:5173 → Astronaut → In AR ansehen → Scene Viewer/WebXR')
-console.log('  [ ] Robot model: 3D preview works; AR on Android only (no USDZ)')
+console.log('  [ ] iPhone/iPad: Portal-AR (Kamera-Overlay) für alle Modelle')
+console.log('  [ ] Android:     WebXR Raum-AR oder Portal-Fallback')
+console.log('  [ ] Alle Modell-Chips laden Vorschau-Thumbnails')
 console.log('')
 
 if (failed) {

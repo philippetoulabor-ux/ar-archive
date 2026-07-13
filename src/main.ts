@@ -46,7 +46,7 @@ app.innerHTML = `
         <h1 class="hud-title" id="model-title">${models[0]!.name}</h1>
         <a
           rel="ar"
-          href="${asset('models/astronaut.usdz')}"
+          href="#"
           class="hud-mode hud-quick-look hidden"
           id="hud-quick-look"
         >

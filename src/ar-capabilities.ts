@@ -54,7 +54,7 @@ export function hintForMode(
   }
 
   if (roomCapability === 'quick-look') {
-    return 'Astronaut wählen · dann „In den Raum platzieren“ (Safari)'
+    return 'Modell wählen · dann „In den Raum platzieren“ (Safari)'
   }
 
   if (roomCapability === 'webxr') {

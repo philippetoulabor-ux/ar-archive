@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { compositeHighRes, captureVideoFrameSync, captureHiResPhoto, drawFrozenPreview, getCaptureOutputSize, type FrozenBackground } from './capture.ts'
+import { patchArMaterials } from './material-patches.ts'
 
 export interface CameraAROptions {
   container: HTMLElement
@@ -189,6 +190,7 @@ export class CameraARViewer {
       url,
       (gltf) => {
         const model = gltf.scene
+        patchArMaterials(model)
         model.traverse((child) => {
           if (child instanceof THREE.Mesh) {
             child.castShadow = true

@@ -1,5 +1,6 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
+import { patchArMaterials } from './material-patches.ts'
 
 const loader = new GLTFLoader()
 
@@ -49,6 +50,7 @@ export async function renderModelPreview(
 
   try {
     const gltf = await loader.loadAsync(glbUrl)
+    patchArMaterials(gltf.scene)
     normalizeModel(gltf.scene)
     scene.add(gltf.scene)
     renderer.render(scene, camera)

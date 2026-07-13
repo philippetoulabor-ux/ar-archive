@@ -1,6 +1,7 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
 import { compositeHighRes, drawFrozenPreview, getCaptureOutputSize, type FrozenBackground } from './capture.ts'
+import { patchArMaterials } from './material-patches.ts'
 
 export interface RoomARViewerOptions {
   stage: HTMLElement
@@ -131,6 +132,7 @@ export class RoomARViewer {
       url,
       (gltf) => {
         const model = gltf.scene
+        patchArMaterials(model)
         const box = new THREE.Box3().setFromObject(model)
         const center = box.getCenter(new THREE.Vector3())
         const size = box.getSize(new THREE.Vector3())
