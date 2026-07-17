@@ -5,75 +5,46 @@ export interface ModelAsset {
   name: string
   description: string
   glb: string
+  /** Static chip preview (baked via `npm run bake-thumbs`). */
+  thumb: string
   usdz?: string
   poster?: string
 }
 
+function modelAsset(
+  id: string,
+  name: string,
+  description: string,
+  extras: Partial<Pick<ModelAsset, 'usdz' | 'poster'>> = {},
+): ModelAsset {
+  return {
+    id,
+    name,
+    description,
+    glb: asset(`models/${id}.glb`),
+    thumb: asset(`models/thumbs/${id}.webp`),
+    ...extras,
+  }
+}
+
 export const models: ModelAsset[] = [
-  {
-    id: 'middleman',
-    name: 'Middleman',
-    description: 'Regalfigur aus dem Wohnzimmer.',
-    glb: asset('models/middleman.glb'),
-  },
-  {
-    id: 'ls-candle',
-    name: 'Lucky Star Kerze',
-    description: 'Leuchtende Kerze aus dem Regal.',
-    glb: asset('models/ls-candle.glb'),
-  },
-  {
-    id: 'alien-chair',
-    name: 'Alien Chair',
-    description: 'Stuhl mit Alien-Design.',
-    glb: asset('models/alien-chair.glb'),
-  },
-  {
-    id: 'x-bock-couch',
-    name: 'X-Bock Couch',
-    description: 'Modulare Sitzmöbel-Konstruktion.',
-    glb: asset('models/x-bock-couch.glb'),
-  },
-  {
-    id: 'weblampe',
-    name: 'Weblampe',
-    description: 'Gewebte Lichtskulptur.',
-    glb: asset('models/weblampe.glb'),
-  },
-  {
-    id: 'speaker-module',
-    name: 'Speaker Module',
-    description: 'Lautsprecher-Modul aus dem Soundsystem.',
-    glb: asset('models/speaker-module.glb'),
-  },
-  {
-    id: 'glowing-puppe',
-    name: 'Glowing Puppe',
-    description: 'Leuchtende Puppe im Regal.',
-    glb: asset('models/glowing-puppe.glb'),
-  },
-  {
-    id: 'grillz-poster',
-    name: 'Grillz Poster',
-    description: 'Poster mit Grillz-Motiv.',
-    glb: asset('models/grillz-poster.glb'),
-  },
-  {
-    id: 'laptop',
-    name: 'Laptop',
-    description: 'Laptop auf dem Tisch.',
-    glb: asset('models/laptop.glb'),
-  },
-  {
-    id: 'regalbretter',
-    name: 'Regalbretter',
-    description: 'Holzbretter im Regal.',
-    glb: asset('models/regalbretter.glb'),
-  },
-  {
-    id: 'regal-bild',
-    name: 'Regal Bild',
-    description: 'Bild im Regal.',
-    glb: asset('models/regal-bild.glb'),
-  },
+  modelAsset('middleman', 'Middleman', 'Regalfigur aus dem Wohnzimmer.'),
+  modelAsset('ls-candle', 'Lucky Star Kerze', 'Leuchtende Kerze aus dem Regal.'),
+  modelAsset('alien-chair', 'Alien Chair', 'Stuhl mit Alien-Design.'),
+  modelAsset(
+    'x-bock-couch',
+    'X-Bock Couch',
+    'Modulare Sitzmöbel-Konstruktion.',
+  ),
+  modelAsset('weblampe', 'Weblampe', 'Gewebte Lichtskulptur.'),
+  modelAsset(
+    'speaker-module',
+    'Speaker Module',
+    'Lautsprecher-Modul aus dem Soundsystem.',
+  ),
+  modelAsset('glowing-puppe', 'Glowing Puppe', 'Leuchtende Puppe im Regal.'),
+  modelAsset('grillz-poster', 'Grillz Poster', 'Poster mit Grillz-Motiv.'),
+  modelAsset('laptop', 'Laptop', 'Laptop auf dem Tisch.'),
+  modelAsset('regalbretter', 'Regalbretter', 'Holzbretter im Regal.'),
+  modelAsset('regal-bild', 'Regal Bild', 'Bild im Regal.'),
 ]

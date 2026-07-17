@@ -250,25 +250,28 @@ button {
   flex-shrink: 0;
   width: 4.25rem;
   height: 4.25rem;
-  padding: 0;
-  border-radius: 0.75rem;
+  padding: 0.1rem;
+  border-radius: 5px;
   overflow: hidden;
-  border: 2px solid rgba(255, 255, 255, 0.2);
-  background: rgba(255, 255, 255, 0.08);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-  transition: border-color 0.15s ease, transform 0.15s ease;
+  border: 2px solid transparent;
+  background: #fff;
+  opacity: 0.5;
+  transition: border-color 0.15s ease, transform 0.15s ease, opacity 0.15s ease;
 }
 
 .model-chip-preview {
   display: block;
   width: 100%;
   height: 100%;
+  object-fit: contain;
+  object-position: center;
+  background: #fff;
 }
 
 .model-chip.active {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 1px var(--accent);
+  opacity: 1;
+  border-color: #8a8a8a;
+  box-shadow: 0 0 0 2px #8a8a8a;
   transform: scale(1.05);
 }
 
@@ -279,7 +282,7 @@ button {
 .ar-frozen-bg {
   position: absolute;
   inset: 0;
-  z-index: 0.5;
+  z-index: 0;
   width: 100%;
   height: 100%;
   object-fit: cover;
@@ -315,6 +318,57 @@ button {
   cursor: wait;
 }
 
+.compose-actions {
+  position: absolute;
+  left: 50%;
+  bottom: calc(max(1rem, env(safe-area-inset-bottom)) + 5.75rem);
+  transform: translateX(-50%);
+  z-index: 11;
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  pointer-events: auto;
+}
+
+.compose-actions.hidden {
+  display: none;
+}
+
+.compose-save-btn,
+.compose-close-btn {
+  padding: 0.75rem 1.5rem;
+  border-radius: 999px;
+  font-size: 1rem;
+  font-weight: 600;
+  border: none;
+  color: #fff;
+}
+
+.compose-save-btn {
+  background: rgb(34, 197, 94);
+}
+
+.compose-close-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.85rem;
+  height: 2.85rem;
+  padding: 0;
+  background: rgb(239, 68, 68);
+}
+
+.compose-close-icon {
+  width: 1.25rem;
+  height: 1.25rem;
+  display: block;
+}
+
+.compose-save-btn:disabled {
+  opacity: 0.6;
+  cursor: wait;
+}
+
 .shutter-flash {
   position: absolute;
   inset: 0;
@@ -335,53 +389,6 @@ button {
   100% {
     opacity: 0;
   }
-}
-
-.capture-preview {
-  position: absolute;
-  inset: 0;
-  z-index: 25;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 1rem;
-  background: #000;
-  padding: max(1rem, env(safe-area-inset-top)) 1rem max(1rem, env(safe-area-inset-bottom));
-}
-
-.capture-preview.hidden {
-  display: none;
-}
-
-.capture-preview img {
-  flex: 1;
-  min-height: 0;
-  max-width: 100%;
-  object-fit: contain;
-}
-
-.capture-preview-actions {
-  display: flex;
-  gap: 0.75rem;
-  flex-shrink: 0;
-}
-
-.capture-action-btn {
-  padding: 0.625rem 1.25rem;
-  border-radius: 999px;
-  font-size: 0.9375rem;
-  font-weight: 500;
-  color: var(--text);
-  background: rgba(255, 255, 255, 0.14);
-  border: 1px solid rgba(255, 255, 255, 0.22);
-  backdrop-filter: blur(8px);
-  -webkit-backdrop-filter: blur(8px);
-}
-
-.capture-action-btn:first-child {
-  background: rgba(91, 140, 255, 0.4);
-  border-color: var(--accent);
 }
 
 .gesture-hint {

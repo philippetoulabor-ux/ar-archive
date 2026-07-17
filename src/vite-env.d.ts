@@ -11,11 +11,7 @@ interface XRSystem {
 declare global {
   interface Navigator {
     xr?: XRSystem
-  }
-
-  class ImageCapture {
-    constructor(videoTrack: MediaStreamTrack)
-    takePhoto(photoSettings?: PhotoSettings): Promise<Blob>
+    deviceMemory?: number
   }
 }
 

@@ -4,18 +4,31 @@ import { join } from 'node:path'
 const root = join(import.meta.dirname, '..')
 const modelsDir = join(root, 'public', 'models')
 
+const glbIds = [
+  'middleman',
+  'ls-candle',
+  'alien-chair',
+  'x-bock-couch',
+  'weblampe',
+  'speaker-module',
+  'glowing-puppe',
+  'grillz-poster',
+  'laptop',
+  'regalbretter',
+  'regal-bild',
+]
+
 const assets = [
-  { file: 'middleman.glb', minBytes: 10_000, type: 'glb' },
-  { file: 'ls-candle.glb', minBytes: 10_000, type: 'glb' },
-  { file: 'alien-chair.glb', minBytes: 10_000, type: 'glb' },
-  { file: 'x-bock-couch.glb', minBytes: 10_000, type: 'glb' },
-  { file: 'weblampe.glb', minBytes: 10_000, type: 'glb' },
-  { file: 'speaker-module.glb', minBytes: 10_000, type: 'glb' },
-  { file: 'glowing-puppe.glb', minBytes: 10_000, type: 'glb' },
-  { file: 'grillz-poster.glb', minBytes: 10_000, type: 'glb' },
-  { file: 'laptop.glb', minBytes: 10_000, type: 'glb' },
-  { file: 'regalbretter.glb', minBytes: 10_000, type: 'glb' },
-  { file: 'regal-bild.glb', minBytes: 10_000, type: 'glb' },
+  ...glbIds.map((id) => ({
+    file: `${id}.glb`,
+    minBytes: 10_000,
+    type: 'glb',
+  })),
+  ...glbIds.map((id) => ({
+    file: `thumbs/${id}.webp`,
+    minBytes: 200,
+    type: 'webp',
+  })),
 ]
 
 let failed = false
@@ -35,6 +48,15 @@ for (const asset of assets) {
       const magic = header.toString('utf8')
       if (magic !== 'glTF') {
         console.error(`FAIL ${asset.file}: invalid GLB magic (${magic})`)
+        failed = true
+        continue
+      }
+    }
+    if (asset.type === 'webp') {
+      const magic = header.toString('ascii')
+      // RIFF....WEBP — check RIFF prefix
+      if (magic !== 'RIFF') {
+        console.error(`FAIL ${asset.file}: invalid WebP magic (${magic})`)
         failed = true
         continue
       }

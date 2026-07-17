@@ -9,7 +9,6 @@ import {
   updateQuickLookAnchor,
 } from './quick-look.ts'
 import { RoomARViewer } from './room-ar-viewer.ts'
-import { renderModelPreview } from './model-preview.ts'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
 let activeModel: ModelAsset = models[0]!
@@ -19,8 +18,6 @@ let portalViewer: CameraARViewer | null = null
 let roomViewer: RoomARViewer | null = null
 let started = false
 let capturePhase: CapturePhase = 'live'
-let lastCaptureBlob: Blob | null = null
-let previewObjectUrl: string | null = null
 let gestureHintDismissed = false
 let gestureHintTimer: ReturnType<typeof setTimeout> | null = null
 
@@ -36,8 +33,8 @@ app.innerHTML = `
     </div>
 
     <div class="start-overlay" id="start-overlay">
-      <p class="start-text">Berühre den Bildschirm</p>
-      <p class="start-sub" id="start-sub">Kamera & AR starten</p>
+      <p class="start-text">Touch the screen</p>
+      <p class="start-sub" id="start-sub">Start camera & AR</p>
     </div>
 
     <div class="hud">
@@ -67,7 +64,15 @@ app.innerHTML = `
                 data-model-id="${model.id}"
                 aria-label="${model.name}"
               >
-                <canvas class="model-chip-preview" width="128" height="128"></canvas>
+                <img
+                  class="model-chip-preview"
+                  src="${model.thumb}"
+                  alt=""
+                  width="128"
+                  height="128"
+                  loading="lazy"
+                  decoding="async"
+                />
               </button>
             `,
           )
@@ -75,13 +80,20 @@ app.innerHTML = `
       </div>
 
       <button type="button" class="shutter-btn hidden" id="shutter-btn" aria-label="Aufnahme"></button>
-    </div>
-
-    <div class="capture-preview hidden" id="capture-preview">
-      <img id="capture-preview-img" alt="Aufnahme" />
-      <div class="capture-preview-actions">
-        <button type="button" class="capture-action-btn" id="capture-download">Speichern</button>
-        <button type="button" class="capture-action-btn" id="capture-close">Schliessen</button>
+      <div class="compose-actions hidden" id="compose-actions">
+        <button type="button" class="compose-save-btn" id="compose-save-btn">SAVE</button>
+        <button type="button" class="compose-close-btn" id="compose-close-btn" aria-label="Zurück">
+          <svg class="compose-close-icon" viewBox="0 0 24 24" aria-hidden="true">
+            <path
+              fill="none"
+              stroke="currentColor"
+              stroke-width="2.5"
+              stroke-linecap="round"
+              stroke-linejoin="round"
+              d="M4.5 12a7.5 7.5 0 1 0 2.1-5.2M4.5 4.5v4.2h4.2"
+            />
+          </svg>
+        </button>
       </div>
     </div>
 
@@ -104,10 +116,9 @@ const hudWebXR = document.querySelector('#hud-webxr') as HTMLButtonElement
 const modelBar = document.querySelector('#model-bar')!
 const gestureHint = document.querySelector('#gesture-hint')!
 const shutterBtn = document.querySelector('#shutter-btn') as HTMLButtonElement
-const capturePreview = document.querySelector('#capture-preview') as HTMLElement
-const capturePreviewImg = document.querySelector('#capture-preview-img') as HTMLImageElement
-const captureDownload = document.querySelector('#capture-download') as HTMLButtonElement
-const captureClose = document.querySelector('#capture-close') as HTMLButtonElement
+const composeActions = document.querySelector('#compose-actions') as HTMLElement
+const composeSaveBtn = document.querySelector('#compose-save-btn') as HTMLButtonElement
+const composeCloseBtn = document.querySelector('#compose-close-btn') as HTMLButtonElement
 const shutterFlash = document.querySelector('#shutter-flash') as HTMLElement
 
 function triggerShutterFlash(): void {
@@ -120,32 +131,9 @@ function getActiveViewer(): CameraARViewer | RoomARViewer | null {
   return activeView === 'webxr' ? roomViewer : portalViewer
 }
 
-function hidePreviewOnly(): void {
-  capturePreview.classList.add('hidden')
-  if (previewObjectUrl) {
-    URL.revokeObjectURL(previewObjectUrl)
-    previewObjectUrl = null
-  }
-  capturePreviewImg.removeAttribute('src')
-}
-
 function resetCaptureState(): void {
   getActiveViewer()?.unfreeze()
   capturePhase = 'live'
-  lastCaptureBlob = null
-}
-
-function hidePreview(): void {
-  hidePreviewOnly()
-  resetCaptureState()
-}
-
-function showPreview(blob: Blob): void {
-  hidePreviewOnly()
-  lastCaptureBlob = blob
-  previewObjectUrl = URL.createObjectURL(blob)
-  capturePreviewImg.src = previewObjectUrl
-  capturePreview.classList.remove('hidden')
 }
 
 function isLikelyDevHost(): boolean {
@@ -165,16 +153,16 @@ function setLoading(visible: boolean, text?: string, percent?: number): void {
 
 function updateStartSub(): void {
   if (roomCapability === 'webxr') {
-    startSub.textContent = 'Raum-AR starten · Modell auf Boden platzieren'
+    startSub.textContent = 'Start room AR · place model on floor'
   } else if (roomCapability === 'quick-look' && activeModel.usdz) {
-    startSub.textContent = 'Kamera starten · danach „In den Raum platzieren“'
+    startSub.textContent = 'Start camera · then “Place in room”'
   } else {
-    startSub.textContent = 'Kamera starten'
+    startSub.textContent = 'Start camera'
   }
 }
 
-function updateGestureHint(hint: string): void {
-  if (!started || gestureHintDismissed) {
+function updateGestureHint(hint: string, force = false): void {
+  if (!started || (gestureHintDismissed && !force)) {
     gestureHint.classList.add('hidden')
     return
   }
@@ -182,7 +170,7 @@ function updateGestureHint(hint: string): void {
   gestureHint.textContent = hint
   gestureHint.classList.remove('hidden')
 
-  if (!gestureHintTimer) {
+  if (!force && !gestureHintTimer) {
     gestureHintTimer = setTimeout(() => {
       gestureHintDismissed = true
       gestureHint.classList.add('hidden')
@@ -207,10 +195,13 @@ function updateUI(placed = false): void {
     hint = 'Quick Look nur in Safari (nicht In-App-Browser)'
   }
 
-  updateGestureHint(hint)
+  updateGestureHint(hint, capturePhase === 'photo')
 
   const viewerActive = Boolean(portalViewer || roomViewer)
-  shutterBtn.classList.toggle('hidden', !viewerActive || !started)
+  const showShutter = viewerActive && started && capturePhase === 'live'
+  const showCompose = viewerActive && started && capturePhase === 'photo'
+  shutterBtn.classList.toggle('hidden', !showShutter)
+  composeActions.classList.toggle('hidden', !showCompose)
 
   hudQuickLook.classList.add('hidden')
   hudWebXR.classList.add('hidden')
@@ -233,7 +224,6 @@ async function refreshCapability(): Promise<void> {
 
 async function startPortal(): Promise<void> {
   resetCaptureState()
-  hidePreview()
   portalViewer?.destroy()
   portalViewer = new CameraARViewer({
     container: stage,
@@ -254,7 +244,6 @@ async function startPortal(): Promise<void> {
 
 async function startWebXR(): Promise<void> {
   resetCaptureState()
-  hidePreview()
   portalViewer?.destroy()
   portalViewer = null
 
@@ -317,8 +306,6 @@ async function beginExperience(): Promise<void> {
 }
 
 async function switchModel(model: ModelAsset): Promise<void> {
-  resetCaptureState()
-  hidePreview()
   activeModel = model
   modelTitle.textContent = model.name
 
@@ -341,6 +328,7 @@ async function switchModel(model: ModelAsset): Promise<void> {
   if (portalViewer) {
     setLoading(true, 'Modell wird geladen…', 0)
     portalViewer.loadModel(model.glb)
+    updateUI()
   }
 }
 
@@ -378,52 +366,52 @@ shutterBtn.addEventListener('click', () => {
   void onShutterClick()
 })
 
-captureDownload.addEventListener('click', () => {
-  if (!lastCaptureBlob) return
-  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-  downloadBlob(lastCaptureBlob, `ar-aufnahme-${timestamp}.jpg`)
+composeSaveBtn.addEventListener('click', () => {
+  void onComposeSave()
 })
 
-captureClose.addEventListener('click', () => {
-  hidePreview()
+composeCloseBtn.addEventListener('click', () => {
+  resetCaptureState()
   updateUI(activeView === 'webxr' && (roomViewer?.isPlaced() ?? false))
 })
 
 async function onShutterClick(): Promise<void> {
   const viewer = getActiveViewer()
-  if (!viewer) return
-
-  triggerShutterFlash()
-
-  if (capturePhase === 'live') {
-    viewer.freezeBackground()
-    capturePhase = 'frozen'
-    updateUI(activeView === 'webxr' && (roomViewer?.isPlaced() ?? false))
-    return
-  }
+  if (!viewer || capturePhase !== 'live') return
 
   shutterBtn.disabled = true
+  triggerShutterFlash()
 
   try {
-    const blob = await viewer.captureComposite()
-    showPreview(blob)
+    await viewer.takePhoto()
+    capturePhase = 'photo'
     updateUI(activeView === 'webxr' && (roomViewer?.isPlaced() ?? false))
   } catch (error) {
-    console.error('Capture failed:', error)
+    console.error('Photo failed:', error)
+    viewer.unfreeze()
+    capturePhase = 'live'
+    updateUI(activeView === 'webxr' && (roomViewer?.isPlaced() ?? false))
   } finally {
     shutterBtn.disabled = false
   }
 }
 
-void refreshCapability()
+async function onComposeSave(): Promise<void> {
+  const viewer = getActiveViewer()
+  if (!viewer || capturePhase !== 'photo') return
 
-function initModelPreviews(): void {
-  modelBar.querySelectorAll<HTMLButtonElement>('.model-chip').forEach((chip) => {
-    const model = models.find((item) => item.id === chip.dataset.modelId)
-    const canvas = chip.querySelector<HTMLCanvasElement>('.model-chip-preview')
-    if (!model || !canvas) return
-    void renderModelPreview(canvas, model.glb)
-  })
+  composeSaveBtn.disabled = true
+  triggerShutterFlash()
+
+  try {
+    const blob = await viewer.captureComposite()
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+    downloadBlob(blob, `ar-aufnahme-${timestamp}.jpg`)
+  } catch (error) {
+    console.error('Compose failed:', error)
+  } finally {
+    composeSaveBtn.disabled = false
+  }
 }
 
-initModelPreviews()
+void refreshCapability()

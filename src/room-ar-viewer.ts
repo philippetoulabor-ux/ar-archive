@@ -1,6 +1,15 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-import { compositeHighRes, drawFrozenPreview, getCaptureOutputSize, type FrozenBackground } from './capture.ts'
+import {
+  drawFrozenPreview,
+  drawImageCover,
+  EXPORT_JPEG_QUALITY,
+  getCaptureOutputSize,
+  releaseCanvas,
+  MAX_CAPTURE_EDGE,
+  type FrozenBackground,
+} from './capture.ts'
+import { disposeObject3D } from './dispose-object3d.ts'
 import { patchArMaterials } from './material-patches.ts'
 
 export interface RoomARViewerOptions {
@@ -28,6 +37,8 @@ export class RoomARViewer {
   private hitTestSource: XRHitTestSource | null = null
   private referenceSpace: XRReferenceSpace | null = null
   private currentModel: THREE.Object3D | null = null
+  /** Bumped on each loadModel/cleanup so late GLTF callbacks are ignored. */
+  private loadGeneration = 0
   private placed = false
   private onLoading?: (progress: number) => void
   private onModelLoaded?: () => void
@@ -37,6 +48,7 @@ export class RoomARViewer {
   private onSelectBound: () => void
   private onSessionEndBound: () => void
   private onSessionStartBound: () => void
+  private cleanedUp = false
 
   constructor(options: RoomARViewerOptions) {
     this.stage = options.stage
@@ -120,10 +132,8 @@ export class RoomARViewer {
   }
 
   loadModel(url: string): void {
-    if (this.currentModel) {
-      this.modelRoot.remove(this.currentModel)
-      this.currentModel = null
-    }
+    const generation = ++this.loadGeneration
+    this.clearCurrentModel()
 
     this.placed = false
     this.reticle.visible = false
@@ -131,6 +141,11 @@ export class RoomARViewer {
     this.loader.load(
       url,
       (gltf) => {
+        if (generation !== this.loadGeneration) {
+          disposeObject3D(gltf.scene)
+          return
+        }
+
         const model = gltf.scene
         patchArMaterials(model)
         const box = new THREE.Box3().setFromObject(model)
@@ -153,14 +168,25 @@ export class RoomARViewer {
         this.onModelLoaded?.()
       },
       (event) => {
+        if (generation !== this.loadGeneration) return
         if (event.lengthComputable) {
           this.onLoading?.(Math.round((event.loaded / event.total) * 100))
         } else {
           this.onLoading?.(50)
         }
       },
-      () => this.onError?.('Modell konnte nicht geladen werden.'),
+      () => {
+        if (generation !== this.loadGeneration) return
+        this.onError?.('Modell konnte nicht geladen werden.')
+      },
     )
+  }
+
+  private clearCurrentModel(): void {
+    if (!this.currentModel) return
+    this.modelRoot.remove(this.currentModel)
+    disposeObject3D(this.currentModel)
+    this.currentModel = null
   }
 
   isPlaced(): boolean {
@@ -171,47 +197,75 @@ export class RoomARViewer {
     return this.frozen
   }
 
-  freezeBackground(): void {
+  /** Capture current XR frame as photo background (passthrough quality limited). */
+  async takePhoto(): Promise<void> {
     this.renderer.render(this.scene, this.camera)
     const canvas = this.renderer.domElement
+    if (canvas.width < 1 || canvas.height < 1) {
+      throw new Error('XR-Frame nicht verfügbar')
+    }
 
     const sourceCanvas = document.createElement('canvas')
     sourceCanvas.width = canvas.width
     sourceCanvas.height = canvas.height
     const ctx = sourceCanvas.getContext('2d')
-    if (!ctx) return
+    if (!ctx) {
+      throw new Error('Canvas 2D nicht verfügbar')
+    }
     ctx.drawImage(canvas, 0, 0)
+
+    if (this.frozenBackground) {
+      releaseCanvas(this.frozenBackground.canvas)
+    }
+
+    const viewportWidth = this.stage.clientWidth || canvas.width
+    const viewportHeight = this.stage.clientHeight || canvas.height
 
     this.frozenBackground = {
       canvas: sourceCanvas,
       sourceWidth: sourceCanvas.width,
       sourceHeight: sourceCanvas.height,
-      viewportWidth: canvas.width,
-      viewportHeight: canvas.height,
+      viewportWidth,
+      viewportHeight,
     }
 
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
     drawFrozenPreview(
       this.frozenBg,
       sourceCanvas,
-      canvas.width,
-      canvas.height,
+      Math.max(1, Math.round(viewportWidth * dpr)),
+      Math.max(1, Math.round(viewportHeight * dpr)),
     )
     this.frozenBg.classList.remove('hidden')
     this.frozen = true
   }
 
+  freezeBackground(): void {
+    void this.takePhoto().catch((error) => {
+      console.error('takePhoto failed:', error)
+      this.onError?.(
+        error instanceof Error ? error.message : 'Foto fehlgeschlagen',
+      )
+    })
+  }
+
   async captureComposite(): Promise<Blob> {
     if (!this.frozen || !this.frozenBackground) {
-      throw new Error('Hintergrund ist nicht eingefroren')
+      throw new Error('Kein Foto vorhanden')
     }
 
     this.renderer.render(this.scene, this.camera)
+    const source = this.renderer.domElement
+    if (source.width < 1 || source.height < 1) {
+      throw new Error('XR-Frame nicht verfügbar')
+    }
 
     const { width, height } = getCaptureOutputSize(
       this.frozenBackground.viewportWidth,
       this.frozenBackground.viewportHeight,
-      this.frozenBackground.sourceWidth,
-      this.frozenBackground.sourceHeight,
+      source.width,
+      source.height,
+      MAX_CAPTURE_EDGE,
     )
 
     const exportCanvas = document.createElement('canvas')
@@ -221,18 +275,28 @@ export class RoomARViewer {
     if (!ctx) {
       throw new Error('Canvas 2D nicht verfügbar')
     }
-    ctx.drawImage(this.renderer.domElement, 0, 0, width, height)
+    drawImageCover(ctx, source, width, height)
 
-    try {
-      return await compositeHighRes(this.frozenBackground, exportCanvas)
-    } finally {
-      exportCanvas.remove()
-    }
+    return new Promise((resolve, reject) => {
+      exportCanvas.toBlob(
+        (blob) => {
+          releaseCanvas(exportCanvas)
+          if (blob) resolve(blob)
+          else reject(new Error('Export fehlgeschlagen'))
+        },
+        'image/jpeg',
+        EXPORT_JPEG_QUALITY,
+      )
+    })
   }
 
   unfreeze(): void {
     this.frozenBg.classList.add('hidden')
-    this.frozenBackground = null
+    if (this.frozenBackground) {
+      releaseCanvas(this.frozenBackground.canvas)
+      this.frozenBackground = null
+    }
+    releaseCanvas(this.frozenBg)
     this.frozen = false
   }
 
@@ -288,13 +352,19 @@ export class RoomARViewer {
   }
 
   private cleanup(): void {
+    if (this.cleanedUp) return
+    this.cleanedUp = true
+    this.loadGeneration += 1
     this.renderer.setAnimationLoop(null)
     this.renderer.xr.removeEventListener('sessionstart', this.onSessionStartBound)
     this.hitTestSource = null
     this.referenceSpace = null
     this.placed = false
-    this.currentModel = null
+    this.unfreeze()
+    this.clearCurrentModel()
     this.modelRoot.clear()
+    disposeObject3D(this.reticle)
+    this.scene.remove(this.reticle)
     this.frozenBg.remove()
     this.renderer.domElement.remove()
     this.renderer.dispose()

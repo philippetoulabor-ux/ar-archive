@@ -3,7 +3,6 @@ import { join, normalize } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { defineConfig, type Plugin } from 'vite'
-import basicSsl from '@vitejs/plugin-basic-ssl'
 
 const root = fileURLToPath(new URL('.', import.meta.url))
 
@@ -46,13 +45,26 @@ function usdzQuickLookPlugin(): Plugin {
   }
 }
 
+const certFile = join(root, 'certs/localhost.pem')
+const keyFile = join(root, 'certs/localhost-key.pem')
+const https =
+  existsSync(certFile) && existsSync(keyFile) && process.env.AR_HTTPS === '1'
+    ? { cert: readFileSync(certFile), key: readFileSync(keyFile) }
+    : undefined
+
 export default defineConfig({
   base: '/ar-archive/',
-  plugins: [basicSsl(), usdzQuickLookPlugin()],
+  plugins: [usdzQuickLookPlugin()],
   preview: {
     host: true,
+    port: 5174,
+    strictPort: true,
+    https,
   },
   server: {
     host: true,
+    port: 5174,
+    strictPort: true,
+    https,
   },
 })

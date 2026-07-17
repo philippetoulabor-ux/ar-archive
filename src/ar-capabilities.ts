@@ -34,7 +34,7 @@ export async function detectARMode(hasUsdz: boolean): Promise<ARMode> {
   return 'portal'
 }
 
-export type CapturePhase = 'live' | 'frozen'
+export type CapturePhase = 'live' | 'photo'
 
 export function hintForMode(
   _activeView: 'portal' | 'webxr',
@@ -42,15 +42,15 @@ export function hintForMode(
   placed = false,
   capturePhase: CapturePhase = 'live',
 ): string {
-  if (capturePhase === 'frozen') {
-    return 'Modell positionieren · Shutter: Foto aufnehmen'
+  if (capturePhase === 'photo') {
+    return 'Modell positionieren · Speichern lädt das Bild herunter'
   }
 
   if (_activeView === 'webxr') {
     const base = placed
       ? 'Gehe herum · Objekt steht im Raum'
       : 'Bewege das Gerät · Tippe zum Platzieren'
-    return `${base} · Shutter: Hintergrund einfrieren`
+    return `${base} · Shutter: Foto`
   }
 
   if (roomCapability === 'quick-look') {
@@ -58,8 +58,8 @@ export function hintForMode(
   }
 
   if (roomCapability === 'webxr') {
-    return 'Raum-AR verfügbar · Button oben oder neu starten · Shutter: Hintergrund einfrieren'
+    return 'Raum-AR verfügbar · Button oben oder neu starten · Shutter: Foto'
   }
 
-  return 'Ziehen · Pinch · Drehen · Shutter: Hintergrund einfrieren'
+  return 'Ziehen · Pinch · Drehen · Shutter: Foto'
 }

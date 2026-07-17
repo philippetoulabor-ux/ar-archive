@@ -1,6 +1,15 @@
 import * as THREE from 'three'
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js'
-import { compositeHighRes, captureVideoFrameSync, captureHiResPhoto, drawFrozenPreview, getCaptureOutputSize, type FrozenBackground } from './capture.ts'
+import {
+  captureVideoFrameSync,
+  compositeHighRes,
+  drawFrozenPreview,
+  getCaptureOutputSize,
+  getRecommendedCaptureEdge,
+  releaseCanvas,
+  type FrozenBackground,
+} from './capture.ts'
+import { disposeObject3D } from './dispose-object3d.ts'
 import { patchArMaterials } from './material-patches.ts'
 
 export interface CameraAROptions {
@@ -15,11 +24,7 @@ export class CameraARViewer {
   private video: HTMLVideoElement
   private frozenBg: HTMLCanvasElement
   private frozenBackground: FrozenBackground | null = null
-  private exportRenderer: THREE.WebGLRenderer | null = null
-  private exportSize = { width: 0, height: 0 }
-  private hiResUpgradeId = 0
   private canvas: HTMLCanvasElement
-  private videoTrack: MediaStreamTrack | null = null
   private frozen = false
   private scene: THREE.Scene
   private camera: THREE.PerspectiveCamera
@@ -28,10 +33,13 @@ export class CameraARViewer {
   private loader: GLTFLoader
   private animationId = 0
   private currentModel: THREE.Object3D | null = null
+  /** Bumped on each loadModel/destroy so late GLTF callbacks are ignored. */
+  private loadGeneration = 0
   private resizeObserver: ResizeObserver
   private onModelLoaded?: () => void
   private onError?: (message: string) => void
   private onLoading?: (progress: number) => void
+  private maxCaptureEdge: number
 
   private pointers = new Map<number, { x: number; y: number }>()
   private pinchStartDistance = 0
@@ -39,12 +47,15 @@ export class CameraARViewer {
   private dragStart = { x: 0, y: 0, modelX: 0, modelY: 0 }
   private rotateStart = { angle: 0, rotationY: 0 }
   private isDragging = false
+  private renderRunning = false
+  private cameraTracksEnabled = true
 
   constructor(options: CameraAROptions) {
     this.container = options.container
     this.onModelLoaded = options.onModelLoaded
     this.onError = options.onError
     this.onLoading = options.onLoading
+    this.maxCaptureEdge = getRecommendedCaptureEdge()
 
     this.video = document.createElement('video')
     this.video.setAttribute('playsinline', '')
@@ -59,7 +70,6 @@ export class CameraARViewer {
     this.canvas = document.createElement('canvas')
     this.canvas.className = 'ar-canvas'
 
-    // Video & Canvas vor Loading-Overlay (z-index in CSS)
     const loading = this.container.querySelector('.loading-overlay')
     if (loading) {
       this.container.insertBefore(this.video, loading)
@@ -97,17 +107,21 @@ export class CameraARViewer {
     this.resizeObserver = new ResizeObserver(() => {
       this.resize()
       this.fitVideo()
+      if (this.frozen && this.frozenBackground) {
+        this.redrawFrozenPreview()
+      }
     })
     this.resizeObserver.observe(this.container)
     window.addEventListener('resize', this.resize)
 
     this.bindEvents()
+    document.addEventListener('visibilitychange', this.onVisibilityChange)
     requestAnimationFrame(() => this.resize())
   }
 
   async start(): Promise<void> {
     await this.startCamera()
-    this.renderLoop()
+    this.syncMediaState()
   }
 
   private async startCamera(): Promise<void> {
@@ -148,7 +162,6 @@ export class CameraARViewer {
       throw new Error('Kamera nicht verfügbar')
     }
 
-    this.videoTrack = stream.getVideoTracks()[0] ?? null
     this.video.srcObject = stream
     await this.video.play()
 
@@ -169,7 +182,6 @@ export class CameraARViewer {
     })
   }
 
-  /** Kamerabild füllt den Viewport (object-fit: cover). */
   private fitVideo(): void {
     this.video.style.objectFit = 'cover'
     this.video.style.objectPosition = 'center'
@@ -177,10 +189,8 @@ export class CameraARViewer {
   }
 
   loadModel(url: string): void {
-    if (this.currentModel) {
-      this.modelGroup.remove(this.currentModel)
-      this.currentModel = null
-    }
+    const generation = ++this.loadGeneration
+    this.clearCurrentModel()
 
     this.modelGroup.scale.setScalar(1)
     this.applyDefaultModelPosition()
@@ -189,6 +199,11 @@ export class CameraARViewer {
     this.loader.load(
       url,
       (gltf) => {
+        if (generation !== this.loadGeneration) {
+          disposeObject3D(gltf.scene)
+          return
+        }
+
         const model = gltf.scene
         patchArMaterials(model)
         model.traverse((child) => {
@@ -218,6 +233,7 @@ export class CameraARViewer {
         this.onModelLoaded?.()
       },
       (event) => {
+        if (generation !== this.loadGeneration) return
         if (event.lengthComputable) {
           this.onLoading?.(
             Math.round((event.loaded / event.total) * 100),
@@ -227,22 +243,43 @@ export class CameraARViewer {
         }
       },
       (error) => {
+        if (generation !== this.loadGeneration) return
         console.error('GLB load error:', error)
         this.onError?.('Modell konnte nicht geladen werden.')
       },
     )
   }
 
+  private clearCurrentModel(): void {
+    if (!this.currentModel) return
+    this.modelGroup.remove(this.currentModel)
+    disposeObject3D(this.currentModel)
+    this.currentModel = null
+  }
+
   isBackgroundFrozen(): boolean {
     return this.frozen
   }
 
-  freezeBackground(): void {
-    const viewportWidth = this.canvas.width
-    const viewportHeight = this.canvas.height
-    if (viewportWidth < 1 || viewportHeight < 1) return
+  private getViewportSize(): { width: number; height: number } {
+    return {
+      width: this.container.clientWidth,
+      height: this.container.clientHeight,
+    }
+  }
 
-    const sourceCanvas = captureVideoFrameSync(this.video)
+  private getPreviewPixelSize(): { width: number; height: number } {
+    const { width, height } = this.getViewportSize()
+    const dpr = Math.min(window.devicePixelRatio || 1, 2)
+    return {
+      width: Math.max(1, Math.round(width * dpr)),
+      height: Math.max(1, Math.round(height * dpr)),
+    }
+  }
+
+  private setFrozenSource(sourceCanvas: HTMLCanvasElement): void {
+    const previous = this.frozenBackground?.canvas
+    const { width: viewportWidth, height: viewportHeight } = this.getViewportSize()
 
     this.frozenBackground = {
       canvas: sourceCanvas,
@@ -252,60 +289,53 @@ export class CameraARViewer {
       viewportHeight,
     }
 
-    drawFrozenPreview(this.frozenBg, sourceCanvas, viewportWidth, viewportHeight)
+    if (previous && previous !== sourceCanvas) {
+      releaseCanvas(previous)
+    }
+
+    this.redrawFrozenPreview()
+  }
+
+  private redrawFrozenPreview(): void {
+    if (!this.frozenBackground) return
+    const { width, height } = this.getPreviewPixelSize()
+    const { width: vw, height: vh } = this.getViewportSize()
+    this.frozenBackground.viewportWidth = vw
+    this.frozenBackground.viewportHeight = vh
+    drawFrozenPreview(this.frozenBg, this.frozenBackground.canvas, width, height)
+  }
+
+  /**
+   * Freeze the current live video frame immediately (WYSIWYG).
+   * Model stays interactive on top of the photo.
+   */
+  async takePhoto(): Promise<void> {
+    const { width: viewportWidth, height: viewportHeight } = this.getViewportSize()
+    if (viewportWidth < 1 || viewportHeight < 1) {
+      throw new Error('Viewport nicht bereit')
+    }
+
+    const frame = captureVideoFrameSync(this.video, this.maxCaptureEdge)
+    this.setFrozenSource(frame)
     this.frozenBg.classList.remove('hidden')
     this.video.classList.add('hidden')
     this.frozen = true
-
-    this.warmExportRenderer()
-
-    const track =
-      this.videoTrack ??
-      (this.video.srcObject instanceof MediaStream
-        ? this.video.srcObject.getVideoTracks()[0]
-        : null)
-    if (track) {
-      const upgradeId = ++this.hiResUpgradeId
-      void this.upgradeToHiResPhoto(track, upgradeId)
-    }
+    this.syncMediaState()
   }
 
-  private async upgradeToHiResPhoto(
-    track: MediaStreamTrack,
-    upgradeId: number,
-  ): Promise<void> {
-    const hiRes = await captureHiResPhoto(track)
-    if (!hiRes || !this.frozen || !this.frozenBackground) return
-    if (upgradeId !== this.hiResUpgradeId) return
-
-    this.frozenBackground = {
-      ...this.frozenBackground,
-      canvas: hiRes,
-      sourceWidth: hiRes.width,
-      sourceHeight: hiRes.height,
-    }
-    this.warmExportRenderer()
-  }
-
-  private warmExportRenderer(): void {
-    if (!this.frozenBackground) return
-
-    const { width, height } = getCaptureOutputSize(
-      this.frozenBackground.viewportWidth,
-      this.frozenBackground.viewportHeight,
-      this.frozenBackground.sourceWidth,
-      this.frozenBackground.sourceHeight,
-    )
-
-    requestAnimationFrame(() => {
-      if (!this.frozen || !this.frozenBackground) return
-      this.renderModelExport(width, height)
+  /** @deprecated Use takePhoto — kept for callers that expect sync freeze API. */
+  freezeBackground(): void {
+    void this.takePhoto().catch((error) => {
+      console.error('takePhoto failed:', error)
+      this.onError?.(
+        error instanceof Error ? error.message : 'Foto fehlgeschlagen',
+      )
     })
   }
 
   async captureComposite(): Promise<Blob> {
     if (!this.frozen || !this.frozenBackground) {
-      throw new Error('Hintergrund ist nicht eingefroren')
+      throw new Error('Kein Foto vorhanden')
     }
 
     const { width, height } = getCaptureOutputSize(
@@ -313,63 +343,107 @@ export class CameraARViewer {
       this.frozenBackground.viewportHeight,
       this.frozenBackground.sourceWidth,
       this.frozenBackground.sourceHeight,
+      this.maxCaptureEdge,
     )
 
-    const foreground = this.renderModelExport(width, height)
-    return compositeHighRes(this.frozenBackground, foreground)
+    // Pause the live loop so it cannot race a temporary resize of the
+    // primary renderer (same WebGL context = correct textures at full res).
+    this.stopRenderLoop()
+    let foreground: HTMLCanvasElement | null = null
+    try {
+      foreground = this.renderModelExport(width, height)
+      return await compositeHighRes(
+        this.frozenBackground,
+        foreground,
+        this.maxCaptureEdge,
+      )
+    } finally {
+      releaseCanvas(foreground)
+      this.ensureRenderLoop()
+    }
   }
 
+  /**
+   * Render models at export resolution using the primary WebGL context.
+   * A second WebGLRenderer cannot reliably reuse textures already uploaded
+   * to the live context — that path produced soft / broken model layers
+   * while the camera still stayed sharp.
+   */
   private renderModelExport(
     outputWidth: number,
     outputHeight: number,
   ): HTMLCanvasElement {
-    if (
-      !this.exportRenderer ||
-      this.exportSize.width !== outputWidth ||
-      this.exportSize.height !== outputHeight
-    ) {
-      this.exportRenderer?.dispose()
-      const exportCanvas = document.createElement('canvas')
-      this.exportRenderer = new THREE.WebGLRenderer({
-        canvas: exportCanvas,
-        alpha: true,
-        antialias: true,
-        preserveDrawingBuffer: true,
-      })
-      this.exportRenderer.setPixelRatio(1)
-      this.exportRenderer.outputColorSpace = THREE.SRGBColorSpace
-      this.exportRenderer.setClearColor(0x000000, 0)
-      this.exportSize = { width: outputWidth, height: outputHeight }
-      this.exportRenderer.setSize(outputWidth, outputHeight, false)
-    }
-
     const cssWidth = this.container.clientWidth
     const cssHeight = this.container.clientHeight
-    this.camera.aspect = cssWidth / cssHeight
-    this.camera.updateProjectionMatrix()
+    if (cssWidth < 1 || cssHeight < 1) {
+      throw new Error('Viewport nicht bereit')
+    }
 
-    this.exportRenderer.render(this.scene, this.camera)
-    return this.exportRenderer.domElement
+    const gl = this.renderer.getContext()
+    const maxRb =
+      typeof gl.getParameter === 'function'
+        ? Number(gl.getParameter(gl.MAX_RENDERBUFFER_SIZE)) || outputWidth
+        : outputWidth
+    const longest = Math.max(outputWidth, outputHeight)
+    const clamp =
+      longest > maxRb && longest > 0 ? maxRb / longest : 1
+    const width = Math.max(1, Math.round(outputWidth * clamp))
+    const height = Math.max(1, Math.round(outputHeight * clamp))
+
+    const prevPixelRatio = this.renderer.getPixelRatio()
+
+    try {
+      this.camera.aspect = cssWidth / cssHeight
+      this.camera.updateProjectionMatrix()
+      this.renderer.setPixelRatio(1)
+      this.renderer.setSize(width, height, false)
+      this.renderer.setClearColor(0x000000, 0)
+      this.renderer.clear()
+      this.renderer.render(this.scene, this.camera)
+
+      const snapshot = document.createElement('canvas')
+      snapshot.width = width
+      snapshot.height = height
+      const ctx = snapshot.getContext('2d')
+      if (!ctx) {
+        throw new Error('Canvas 2D nicht verfügbar')
+      }
+      ctx.drawImage(this.renderer.domElement, 0, 0, width, height)
+      return snapshot
+    } finally {
+      this.renderer.setPixelRatio(prevPixelRatio)
+      this.renderer.setSize(cssWidth, cssHeight, false)
+    }
   }
 
   unfreeze(): void {
-    this.hiResUpgradeId++
     this.frozenBg.classList.add('hidden')
-    this.frozenBackground = null
+    if (this.frozenBackground) {
+      releaseCanvas(this.frozenBackground.canvas)
+      this.frozenBackground = null
+    }
+    releaseCanvas(this.frozenBg)
     this.video.classList.remove('hidden')
     this.frozen = false
+    this.syncMediaState()
   }
 
   destroy(): void {
-    cancelAnimationFrame(this.animationId)
+    this.loadGeneration += 1
     this.resizeObserver.disconnect()
     window.removeEventListener('resize', this.resize)
+    document.removeEventListener('visibilitychange', this.onVisibilityChange)
+    this.unbindEvents()
+    this.unfreeze()
+    this.stopRenderLoop()
+    this.setCameraTracksEnabled(false)
+    this.clearCurrentModel()
     const stream = this.video.srcObject
     if (stream instanceof MediaStream) {
       stream.getTracks().forEach((track) => track.stop())
     }
+    this.video.srcObject = null
     this.renderer.dispose()
-    this.exportRenderer?.dispose()
     this.video.remove()
     this.frozenBg.remove()
     this.canvas.remove()
@@ -382,8 +456,66 @@ export class CameraARViewer {
     this.canvas.addEventListener('pointercancel', this.onPointerUp)
   }
 
+  private unbindEvents(): void {
+    this.canvas.removeEventListener('pointerdown', this.onPointerDown)
+    this.canvas.removeEventListener('pointermove', this.onPointerMove)
+    this.canvas.removeEventListener('pointerup', this.onPointerUp)
+    this.canvas.removeEventListener('pointercancel', this.onPointerUp)
+    this.pointers.clear()
+    this.isDragging = false
+  }
+
   private applyDefaultModelPosition(): void {
     this.modelGroup.position.set(0, 0, 0)
+  }
+
+  /**
+   * Keep the MediaStream (and its negotiated resolution) alive, but disable
+   * capture when the photo is frozen or the tab is backgrounded.
+   */
+  private syncMediaState(): void {
+    const shouldCapture = !this.frozen && !document.hidden
+    this.setCameraTracksEnabled(shouldCapture)
+
+    if (document.hidden) {
+      this.stopRenderLoop()
+    } else {
+      this.ensureRenderLoop()
+    }
+  }
+
+  private setCameraTracksEnabled(enabled: boolean): void {
+    if (this.cameraTracksEnabled === enabled) return
+    this.cameraTracksEnabled = enabled
+
+    const stream = this.video.srcObject
+    if (stream instanceof MediaStream) {
+      for (const track of stream.getVideoTracks()) {
+        track.enabled = enabled
+      }
+    }
+
+    if (enabled) {
+      void this.video.play().catch(() => {})
+    } else {
+      this.video.pause()
+    }
+  }
+
+  private onVisibilityChange = (): void => {
+    this.syncMediaState()
+  }
+
+  private ensureRenderLoop(): void {
+    if (this.renderRunning || document.hidden) return
+    this.renderRunning = true
+    this.renderLoop()
+  }
+
+  private stopRenderLoop(): void {
+    this.renderRunning = false
+    cancelAnimationFrame(this.animationId)
+    this.animationId = 0
   }
 
   private resize = (): void => {
@@ -397,6 +529,12 @@ export class CameraARViewer {
   }
 
   private renderLoop = (): void => {
+    if (!this.renderRunning || document.hidden) {
+      this.renderRunning = false
+      this.animationId = 0
+      return
+    }
+
     this.animationId = requestAnimationFrame(this.renderLoop)
     this.renderer.render(this.scene, this.camera)
   }

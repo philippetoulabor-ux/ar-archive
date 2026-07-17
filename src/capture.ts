@@ -20,6 +20,30 @@ export interface VideoCoverCrop {
   sh: number
 }
 
+/** Hard cap for composite export / still storage (longest edge). */
+export const MAX_CAPTURE_EDGE = 4096
+
+/** Softer cap for low-memory devices / OOM fallback. */
+export const SOFT_CAPTURE_EDGE = 2560
+
+/** JPEG quality for final export (1 = highest within JPEG). */
+export const EXPORT_JPEG_QUALITY = 1
+
+/**
+ * Highest safe longest-edge for this device (frozen still + composite export).
+ * Live preview requests up to 4K when the camera allows it.
+ */
+export function getRecommendedCaptureEdge(): number {
+  const mem = navigator.deviceMemory
+  if (typeof mem === 'number') {
+    if (mem <= 2) return SOFT_CAPTURE_EDGE
+    if (mem <= 4) return 3072
+    return MAX_CAPTURE_EDGE
+  }
+  // iOS Safari rarely exposes deviceMemory; modern phones handle 4096.
+  return MAX_CAPTURE_EDGE
+}
+
 export function getVideoCoverCrop(
   containerWidth: number,
   containerHeight: number,
@@ -75,6 +99,7 @@ export function getCaptureOutputSize(
   viewportHeight: number,
   sourceWidth: number,
   sourceHeight: number,
+  maxEdge = MAX_CAPTURE_EDGE,
 ): { width: number; height: number; scale: number } {
   const crop = getVideoCoverCrop(
     viewportWidth,
@@ -82,13 +107,20 @@ export function getCaptureOutputSize(
     sourceWidth,
     sourceHeight,
   )
-  const scale = crop.sw / viewportWidth
 
-  return {
-    width: Math.round(crop.sw),
-    height: Math.round(crop.sh),
-    scale,
+  let width = Math.round(crop.sw)
+  let height = Math.round(crop.sh)
+  const longest = Math.max(width, height)
+
+  if (longest > maxEdge && longest > 0) {
+    const factor = maxEdge / longest
+    width = Math.max(1, Math.round(width * factor))
+    height = Math.max(1, Math.round(height * factor))
   }
+
+  const scale = width / viewportWidth
+
+  return { width, height, scale }
 }
 
 export function getCanvasSourceSize(source: CanvasImageSource): {
@@ -116,6 +148,34 @@ export function getCanvasSourceSize(source: CanvasImageSource): {
 function applySmoothing(ctx: CanvasRenderingContext2D): void {
   ctx.imageSmoothingEnabled = true
   ctx.imageSmoothingQuality = 'high'
+}
+
+/** Release backing store so GC can reclaim large canvases. */
+export function releaseCanvas(canvas: HTMLCanvasElement | null | undefined): void {
+  if (!canvas) return
+  canvas.width = 0
+  canvas.height = 0
+}
+
+export function scaleCanvasToMaxEdge(
+  source: HTMLCanvasElement,
+  maxEdge: number,
+): HTMLCanvasElement {
+  const longest = Math.max(source.width, source.height)
+  if (longest <= maxEdge || longest < 1) return source
+
+  const factor = maxEdge / longest
+  const width = Math.max(1, Math.round(source.width * factor))
+  const height = Math.max(1, Math.round(source.height * factor))
+  const canvas = document.createElement('canvas')
+  canvas.width = width
+  canvas.height = height
+  const ctx = canvas.getContext('2d')
+  if (!ctx) return source
+  applySmoothing(ctx)
+  ctx.drawImage(source, 0, 0, width, height)
+  if (canvas !== source) releaseCanvas(source)
+  return canvas
 }
 
 export function drawImageCover(
@@ -163,24 +223,9 @@ export function drawVideoContain(
   drawImageContain(ctx, video, width, height)
 }
 
-export async function blobToCanvas(blob: Blob): Promise<HTMLCanvasElement> {
-  const bitmap = await createImageBitmap(blob)
-  const canvas = document.createElement('canvas')
-  canvas.width = bitmap.width
-  canvas.height = bitmap.height
-  const ctx = canvas.getContext('2d')
-  if (!ctx) {
-    bitmap.close()
-    throw new Error('Canvas 2D nicht verfügbar')
-  }
-  applySmoothing(ctx)
-  ctx.drawImage(bitmap, 0, 0)
-  bitmap.close()
-  return canvas
-}
-
 export function captureVideoFrameSync(
   video: HTMLVideoElement,
+  maxEdge = MAX_CAPTURE_EDGE,
 ): HTMLCanvasElement {
   const width = video.videoWidth
   const height = video.videoHeight
@@ -196,41 +241,20 @@ export function captureVideoFrameSync(
     throw new Error('Canvas 2D nicht verfügbar')
   }
   ctx.drawImage(video, 0, 0, width, height)
-  return canvas
-}
-
-export async function captureHiResPhoto(
-  track: MediaStreamTrack,
-): Promise<HTMLCanvasElement | null> {
-  if (typeof ImageCapture === 'undefined') return null
-
-  try {
-    const capture = new ImageCapture(track)
-    const blob = await capture.takePhoto()
-    return blobToCanvas(blob)
-  } catch {
-    return null
-  }
-}
-
-export async function captureCameraPhoto(
-  track: MediaStreamTrack,
-  video: HTMLVideoElement,
-): Promise<HTMLCanvasElement> {
-  const hiRes = await captureHiResPhoto(track)
-  if (hiRes) return hiRes
-  return captureVideoFrameSync(video)
+  return scaleCanvasToMaxEdge(canvas, maxEdge)
 }
 
 export function compositeHighRes(
   background: FrozenBackground,
   foreground: CanvasImageSource,
+  maxEdge = MAX_CAPTURE_EDGE,
 ): Promise<Blob> {
   const { width, height } = getCaptureOutputSize(
     background.viewportWidth,
     background.viewportHeight,
     background.sourceWidth,
     background.sourceHeight,
+    maxEdge,
   )
 
   const canvas = document.createElement('canvas')
@@ -243,16 +267,23 @@ export function compositeHighRes(
 
   applySmoothing(ctx)
   drawImageCover(ctx, background.canvas, width, height)
+  // Models are rendered at export resolution — avoid smoothing that softens edges
+  // when the GPU drawing buffer is 1:1 with the output (or nearly so).
+  const fg = getCanvasSourceSize(foreground)
+  if (fg.width === width && fg.height === height) {
+    ctx.imageSmoothingEnabled = false
+  }
   ctx.drawImage(foreground, 0, 0, width, height)
 
   return new Promise((resolve, reject) => {
     canvas.toBlob(
       (blob) => {
+        releaseCanvas(canvas)
         if (blob) resolve(blob)
         else reject(new Error('Export fehlgeschlagen'))
       },
       'image/jpeg',
-      0.98,
+      EXPORT_JPEG_QUALITY,
     )
   })
 }
