@@ -42,13 +42,28 @@ export class CameraARViewer {
   private maxCaptureEdge: number
 
   private pointers = new Map<number, { x: number; y: number }>()
-  private pinchStartDistance = 0
-  private pinchStartScale = 1
-  private dragStart = { x: 0, y: 0, modelX: 0, modelY: 0 }
-  private rotateStart = { angle: 0, rotationY: 0 }
-  private isDragging = false
+  /** Single-finger / primary-button: free tumble. Two-finger: pan + pinch. */
+  private gesture: 'none' | 'rotate' | 'pinch' = 'none'
+  private lastPointer = { x: 0, y: 0 }
+  private pinchStart = {
+    distance: 0,
+    scale: 1,
+    midX: 0,
+    midY: 0,
+    modelX: 0,
+    modelY: 0,
+  }
+  private readonly _qYaw = new THREE.Quaternion()
+  private readonly _qPitch = new THREE.Quaternion()
+  private readonly _axisX = new THREE.Vector3(1, 0, 0)
+  private readonly _axisY = new THREE.Vector3(0, 1, 0)
   private renderRunning = false
   private cameraTracksEnabled = true
+
+  /** Radians of rotation per full viewport width/height of drag. */
+  private static readonly ROTATE_SPEED = Math.PI * 1.35
+  /** World units of pan per full viewport width/height of two-finger drag. */
+  private static readonly PAN_SPEED = 2.5
 
   constructor(options: CameraAROptions) {
     this.container = options.container
@@ -194,6 +209,7 @@ export class CameraARViewer {
 
     this.modelGroup.scale.setScalar(1)
     this.applyDefaultModelPosition()
+    this.modelGroup.quaternion.identity()
     this.modelGroup.rotation.set(0, 0, 0)
 
     this.loader.load(
@@ -454,6 +470,8 @@ export class CameraARViewer {
     this.canvas.addEventListener('pointermove', this.onPointerMove)
     this.canvas.addEventListener('pointerup', this.onPointerUp)
     this.canvas.addEventListener('pointercancel', this.onPointerUp)
+    this.canvas.addEventListener('wheel', this.onWheel, { passive: false })
+    this.canvas.addEventListener('contextmenu', this.onContextMenu)
   }
 
   private unbindEvents(): void {
@@ -461,8 +479,10 @@ export class CameraARViewer {
     this.canvas.removeEventListener('pointermove', this.onPointerMove)
     this.canvas.removeEventListener('pointerup', this.onPointerUp)
     this.canvas.removeEventListener('pointercancel', this.onPointerUp)
+    this.canvas.removeEventListener('wheel', this.onWheel)
+    this.canvas.removeEventListener('contextmenu', this.onContextMenu)
     this.pointers.clear()
-    this.isDragging = false
+    this.gesture = 'none'
   }
 
   private applyDefaultModelPosition(): void {
@@ -540,27 +560,26 @@ export class CameraARViewer {
   }
 
   private onPointerDown = (event: PointerEvent): void => {
+    event.preventDefault()
     this.canvas.setPointerCapture(event.pointerId)
     this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
 
     if (this.pointers.size === 1) {
-      this.isDragging = true
-      this.dragStart = {
-        x: event.clientX,
-        y: event.clientY,
-        modelX: this.modelGroup.position.x,
-        modelY: this.modelGroup.position.y,
+      // Secondary / middle button: pan with one pointer (desktop).
+      if (event.button === 1 || event.button === 2 || event.shiftKey) {
+        this.beginPinchGesture()
+        this.pinchStart.midX = event.clientX
+        this.pinchStart.midY = event.clientY
+        this.pinchStart.distance = 0
+      } else {
+        this.gesture = 'rotate'
+        this.lastPointer = { x: event.clientX, y: event.clientY }
       }
+      return
     }
 
     if (this.pointers.size === 2) {
-      this.isDragging = false
-      this.pinchStartDistance = this.getPinchDistance()
-      this.pinchStartScale = this.modelGroup.scale.x
-      this.rotateStart = {
-        angle: this.getPinchAngle(),
-        rotationY: this.modelGroup.rotation.y,
-      }
+      this.beginPinchGesture()
     }
   }
 
@@ -568,42 +587,92 @@ export class CameraARViewer {
     if (!this.pointers.has(event.pointerId)) return
     this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
 
-    if (this.pointers.size === 1 && this.isDragging) {
-      const dx = (event.clientX - this.dragStart.x) / this.container.clientWidth
-      const dy = (event.clientY - this.dragStart.y) / this.container.clientHeight
-      this.modelGroup.position.x = this.dragStart.modelX + dx * 2.5
-      this.modelGroup.position.y = this.dragStart.modelY - dy * 2.5
+    if (this.gesture === 'rotate' && this.pointers.size === 1) {
+      const width = Math.max(1, this.container.clientWidth)
+      const height = Math.max(1, this.container.clientHeight)
+      const dx = event.clientX - this.lastPointer.x
+      const dy = event.clientY - this.lastPointer.y
+      this.lastPointer = { x: event.clientX, y: event.clientY }
+      this.tumbleModel(
+        (dx / width) * CameraARViewer.ROTATE_SPEED,
+        (dy / height) * CameraARViewer.ROTATE_SPEED,
+      )
+      return
     }
 
-    if (this.pointers.size === 2) {
-      const distance = this.getPinchDistance()
-      if (this.pinchStartDistance > 0) {
-        const scale = this.pinchStartScale * (distance / this.pinchStartDistance)
-        this.modelGroup.scale.setScalar(THREE.MathUtils.clamp(scale, 0.2, 4))
-      }
-      const angle = this.getPinchAngle()
-      this.modelGroup.rotation.y =
-        this.rotateStart.rotationY + (angle - this.rotateStart.angle)
+    if (this.gesture === 'pinch' && this.pointers.size >= 1) {
+      this.updatePinchGesture()
     }
   }
 
   private onPointerUp = (event: PointerEvent): void => {
+    if (!this.pointers.has(event.pointerId)) return
     this.pointers.delete(event.pointerId)
-    if (this.pointers.size < 2) {
-      this.pinchStartDistance = 0
-    }
+
     if (this.pointers.size === 0) {
-      this.isDragging = false
+      this.gesture = 'none'
+      return
     }
+
     if (this.pointers.size === 1) {
+      // After lifting one finger of a pinch, continue as rotate.
       const remaining = [...this.pointers.values()][0]!
-      this.isDragging = true
-      this.dragStart = {
-        x: remaining.x,
-        y: remaining.y,
-        modelX: this.modelGroup.position.x,
-        modelY: this.modelGroup.position.y,
-      }
+      this.gesture = 'rotate'
+      this.lastPointer = { x: remaining.x, y: remaining.y }
+    }
+  }
+
+  private onWheel = (event: WheelEvent): void => {
+    event.preventDefault()
+    const factor = event.deltaY > 0 ? 0.92 : 1.08
+    const next = this.modelGroup.scale.x * factor
+    this.modelGroup.scale.setScalar(THREE.MathUtils.clamp(next, 0.2, 4))
+  }
+
+  private onContextMenu = (event: Event): void => {
+    event.preventDefault()
+  }
+
+  /**
+   * Screen-space tumble: horizontal drag spins around world up,
+   * vertical drag around camera right — free rotation without gimbal lock.
+   */
+  private tumbleModel(yaw: number, pitch: number): void {
+    this._qYaw.setFromAxisAngle(this._axisY, yaw)
+    this._qPitch.setFromAxisAngle(this._axisX, pitch)
+    this.modelGroup.quaternion.premultiply(this._qYaw).premultiply(this._qPitch)
+  }
+
+  private beginPinchGesture(): void {
+    this.gesture = 'pinch'
+    const mid = this.getPointerMidpoint()
+    this.pinchStart = {
+      distance: this.getPinchDistance(),
+      scale: this.modelGroup.scale.x,
+      midX: mid.x,
+      midY: mid.y,
+      modelX: this.modelGroup.position.x,
+      modelY: this.modelGroup.position.y,
+    }
+  }
+
+  private updatePinchGesture(): void {
+    const width = Math.max(1, this.container.clientWidth)
+    const height = Math.max(1, this.container.clientHeight)
+    const mid = this.getPointerMidpoint()
+
+    this.modelGroup.position.x =
+      this.pinchStart.modelX +
+      ((mid.x - this.pinchStart.midX) / width) * CameraARViewer.PAN_SPEED
+    this.modelGroup.position.y =
+      this.pinchStart.modelY -
+      ((mid.y - this.pinchStart.midY) / height) * CameraARViewer.PAN_SPEED
+
+    const distance = this.getPinchDistance()
+    if (this.pinchStart.distance > 0 && distance > 0) {
+      const scale =
+        this.pinchStart.scale * (distance / this.pinchStart.distance)
+      this.modelGroup.scale.setScalar(THREE.MathUtils.clamp(scale, 0.2, 4))
     }
   }
 
@@ -615,12 +684,15 @@ export class CameraARViewer {
     return Math.hypot(dx, dy)
   }
 
-  private getPinchAngle(): number {
+  private getPointerMidpoint(): { x: number; y: number } {
     const points = [...this.pointers.values()]
-    if (points.length < 2) return 0
-    return Math.atan2(
-      points[1]!.y - points[0]!.y,
-      points[1]!.x - points[0]!.x,
-    )
+    if (points.length === 0) return { x: 0, y: 0 }
+    if (points.length === 1) {
+      return { x: points[0]!.x, y: points[0]!.y }
+    }
+    return {
+      x: (points[0]!.x + points[1]!.x) / 2,
+      y: (points[0]!.y + points[1]!.y) / 2,
+    }
   }
 }

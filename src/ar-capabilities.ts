@@ -43,7 +43,7 @@ export function hintForMode(
   capturePhase: CapturePhase = 'live',
 ): string {
   if (capturePhase === 'photo') {
-    return 'Modell positionieren · Speichern lädt das Bild herunter'
+    return 'Drehen · Zwei Finger: verschieben/skalieren · Speichern'
   }
 
   if (_activeView === 'webxr') {
@@ -61,5 +61,5 @@ export function hintForMode(
     return 'Raum-AR verfügbar · Button oben oder neu starten · Shutter: Foto'
   }
 
-  return 'Ziehen · Pinch · Drehen · Shutter: Foto'
+  return 'Drehen · Zwei Finger: verschieben/skalieren · Shutter: Foto'
 }

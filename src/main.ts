@@ -99,7 +99,7 @@ app.innerHTML = `
 
     <div class="shutter-flash" id="shutter-flash" aria-hidden="true"></div>
 
-    <p class="gesture-hint hidden" id="gesture-hint">Ziehen · Pinch · Drehen</p>
+    <p class="gesture-hint hidden" id="gesture-hint">Drehen · Zwei Finger verschieben</p>
   </div>
 `
 
