@@ -323,3 +323,63 @@ export function downloadBlob(blob: Blob, filename: string): void {
   link.click()
   URL.revokeObjectURL(url)
 }
+
+export type SaveImageResult = 'shared' | 'downloaded' | 'cancelled' | 'unavailable'
+
+function toImageFile(blob: Blob, filename: string): File {
+  return new File([blob], filename, {
+    type: blob.type || 'image/jpeg',
+    lastModified: Date.now(),
+  })
+}
+
+export function canShareImageFile(file: File): boolean {
+  try {
+    return Boolean(navigator.canShare?.({ files: [file] }))
+  } catch {
+    return false
+  }
+}
+
+export async function shareImageBlob(
+  blob: Blob,
+  filename: string,
+): Promise<'shared' | 'cancelled'> {
+  const file = toImageFile(blob, filename)
+  if (!canShareImageFile(file)) {
+    throw new Error('Share not available')
+  }
+
+  try {
+    await navigator.share({ files: [file], title: filename })
+    return 'shared'
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') {
+      return 'cancelled'
+    }
+    throw error
+  }
+}
+
+/** Share-first when possible; otherwise download (unless allowDownload is false). AbortError → cancelled. */
+export async function saveImageBlob(
+  blob: Blob,
+  filename: string,
+  options: { allowDownload?: boolean } = {},
+): Promise<SaveImageResult> {
+  const allowDownload = options.allowDownload !== false
+  const file = toImageFile(blob, filename)
+
+  if (canShareImageFile(file)) {
+    try {
+      return await shareImageBlob(blob, filename)
+    } catch {
+      /* fall through */
+    }
+  }
+
+  if (!allowDownload) return 'unavailable'
+
+  downloadBlob(blob, filename)
+  return 'downloaded'
+}

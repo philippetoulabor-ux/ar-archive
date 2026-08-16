@@ -404,7 +404,9 @@ button {
   color: var(--text-muted);
   pointer-events: none;
   background: rgba(0, 0, 0, 0.35);
-  white-space: nowrap;
+  white-space: normal;
+  text-align: center;
+  max-width: min(92vw, 22rem);
   opacity: 1;
   transition: opacity 0.4s ease;
 }
@@ -412,4 +414,52 @@ button {
 .gesture-hint.hidden {
   display: none;
   opacity: 0;
+}
+
+.save-fallback {
+  position: absolute;
+  inset: 0;
+  z-index: 20;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 1rem;
+  padding: max(1rem, env(safe-area-inset-top)) max(1rem, env(safe-area-inset-right))
+    max(1rem, env(safe-area-inset-bottom)) max(1rem, env(safe-area-inset-left));
+  background: rgba(0, 0, 0, 0.92);
+  pointer-events: auto;
+}
+
+.save-fallback.hidden {
+  display: none;
+}
+
+.save-fallback-img {
+  max-width: 100%;
+  max-height: min(70vh, 100%);
+  object-fit: contain;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: default;
+}
+
+.save-fallback-hint {
+  margin: 0;
+  padding: 0.4rem 0.85rem;
+  border-radius: 999px;
+  font-size: 0.85rem;
+  color: #fff;
+  background: rgba(255, 255, 255, 0.12);
+  text-align: center;
+}
+
+.save-fallback-close {
+  padding: 0.7rem 1.4rem;
+  border: none;
+  border-radius: 999px;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: #111;
+  background: #fff;
 }

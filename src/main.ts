@@ -1,8 +1,14 @@
 import './style.css'
 import { asset } from './assets.ts'
-import { detectARMode, hintForMode, type ARMode, type CapturePhase } from './ar-capabilities.ts'
+import {
+  detectARMode,
+  hintForMode,
+  isRestrictedInAppBrowser,
+  type ARMode,
+  type CapturePhase,
+} from './ar-capabilities.ts'
 import { CameraARViewer } from './camera-ar.ts'
-import { downloadBlob } from './capture.ts'
+import { saveImageBlob } from './capture.ts'
 import { models, type ModelAsset } from './models.ts'
 import {
   supportsQuickLookLink,
@@ -99,6 +105,12 @@ app.innerHTML = `
 
     <div class="shutter-flash" id="shutter-flash" aria-hidden="true"></div>
 
+    <div class="save-fallback hidden" id="save-fallback" role="dialog" aria-modal="true" aria-labelledby="save-fallback-hint">
+      <img class="save-fallback-img" id="save-fallback-img" alt="Aufnahme" />
+      <p class="save-fallback-hint" id="save-fallback-hint">Lange drücken → Bild sichern</p>
+      <button type="button" class="save-fallback-close" id="save-fallback-close">Schließen</button>
+    </div>
+
     <p class="gesture-hint hidden" id="gesture-hint">Drehen · Zwei Finger verschieben</p>
   </div>
 `
@@ -120,6 +132,11 @@ const composeActions = document.querySelector('#compose-actions') as HTMLElement
 const composeSaveBtn = document.querySelector('#compose-save-btn') as HTMLButtonElement
 const composeCloseBtn = document.querySelector('#compose-close-btn') as HTMLButtonElement
 const shutterFlash = document.querySelector('#shutter-flash') as HTMLElement
+const saveFallback = document.querySelector('#save-fallback') as HTMLElement
+const saveFallbackImg = document.querySelector('#save-fallback-img') as HTMLImageElement
+const saveFallbackClose = document.querySelector('#save-fallback-close') as HTMLButtonElement
+
+let saveFallbackObjectUrl: string | null = null
 
 function triggerShutterFlash(): void {
   shutterFlash.classList.remove('active')
@@ -127,11 +144,28 @@ function triggerShutterFlash(): void {
   shutterFlash.classList.add('active')
 }
 
+function closeSaveFallback(): void {
+  saveFallback.classList.add('hidden')
+  saveFallbackImg.removeAttribute('src')
+  if (saveFallbackObjectUrl) {
+    URL.revokeObjectURL(saveFallbackObjectUrl)
+    saveFallbackObjectUrl = null
+  }
+}
+
+function showSaveFallback(blob: Blob): void {
+  closeSaveFallback()
+  saveFallbackObjectUrl = URL.createObjectURL(blob)
+  saveFallbackImg.src = saveFallbackObjectUrl
+  saveFallback.classList.remove('hidden')
+}
+
 function getActiveViewer(): CameraARViewer | RoomARViewer | null {
   return activeView === 'webxr' ? roomViewer : portalViewer
 }
 
 function resetCaptureState(): void {
+  closeSaveFallback()
   getActiveViewer()?.unfreeze()
   capturePhase = 'live'
 }
@@ -193,6 +227,14 @@ function updateUI(placed = false): void {
 
   if (roomCapability === 'quick-look' && !supportsQuickLookLink()) {
     hint = 'Quick Look nur in Safari (nicht In-App-Browser)'
+  }
+
+  if (
+    capturePhase !== 'photo' &&
+    isRestrictedInAppBrowser() &&
+    !gestureHintDismissed
+  ) {
+    hint += ' · Speichern: Share oder lange drücken'
   }
 
   updateGestureHint(hint, capturePhase === 'photo')
@@ -375,6 +417,10 @@ composeCloseBtn.addEventListener('click', () => {
   updateUI(activeView === 'webxr' && (roomViewer?.isPlaced() ?? false))
 })
 
+saveFallbackClose.addEventListener('click', () => {
+  closeSaveFallback()
+})
+
 async function onShutterClick(): Promise<void> {
   const viewer = getActiveViewer()
   if (!viewer || capturePhase !== 'live') return
@@ -406,7 +452,15 @@ async function onComposeSave(): Promise<void> {
   try {
     const blob = await viewer.captureComposite()
     const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
-    downloadBlob(blob, `ar-aufnahme-${timestamp}.jpg`)
+    const filename = `ar-aufnahme-${timestamp}.jpg`
+    const restricted = isRestrictedInAppBrowser()
+    const result = await saveImageBlob(blob, filename, {
+      allowDownload: !restricted,
+    })
+
+    if (result === 'unavailable' && restricted) {
+      showSaveFallback(blob)
+    }
   } catch (error) {
     console.error('Compose failed:', error)
   } finally {

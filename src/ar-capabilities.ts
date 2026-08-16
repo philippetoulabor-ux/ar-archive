@@ -7,6 +7,17 @@ export function isIOSDevice(): boolean {
   )
 }
 
+/** Instagram / Facebook / similar WebViews where <a download> often just opens the blob. */
+export function isRestrictedInAppBrowser(): boolean {
+  const ua = navigator.userAgent
+  return (
+    /Instagram/i.test(ua) ||
+    /FBAN|FBAV|FB_IAB|FB4A|FBAN\//i.test(ua) ||
+    /Line\//i.test(ua) ||
+    /Twitter|X\/|LinkedInApp|Snapchat|TikTok|BytedanceWebview|Musical_ly/i.test(ua)
+  )
+}
+
 function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
   return Promise.race([
     promise,
@@ -43,6 +54,9 @@ export function hintForMode(
   capturePhase: CapturePhase = 'live',
 ): string {
   if (capturePhase === 'photo') {
+    if (isRestrictedInAppBrowser()) {
+      return 'Speichern: teilen oder lange drücken → Bild sichern'
+    }
     return 'Drehen · Zwei Finger: verschieben/skalieren · Speichern'
   }
 
