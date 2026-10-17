@@ -69,6 +69,10 @@ export class CameraARViewer {
   private cameraTracksEnabled = true
   /** Front-facing / laptop webcam: mirror preview so left/right match a mirror. */
   private mirrorPreview = false
+  private facingMode: 'user' | 'environment' = CameraARViewer.isMobileUa()
+    ? 'environment'
+    : 'user'
+  private flippingCamera = false
 
   /** Radians of rotation per full viewport width/height of drag. */
   private static readonly ROTATE_SPEED = Math.PI * 1.35
@@ -162,14 +166,47 @@ export class CameraARViewer {
     this.gesture = 'none'
   }
 
+  canFlipCamera(): boolean {
+    return CameraARViewer.isMobileUa() && !this.frozen
+  }
+
+  getFacingMode(): 'user' | 'environment' {
+    return this.facingMode
+  }
+
+  async flipCamera(): Promise<void> {
+    if (!this.canFlipCamera() || this.flippingCamera) return
+    this.flippingCamera = true
+    const previous = this.facingMode
+    const next = previous === 'environment' ? 'user' : 'environment'
+    try {
+      this.facingMode = next
+      this.releaseStream()
+      await this.startCamera()
+      this.syncMediaState()
+    } catch (error) {
+      this.facingMode = previous
+      try {
+        await this.startCamera()
+        this.syncMediaState()
+      } catch {
+        /* keep original error */
+      }
+      throw error
+    } finally {
+      this.flippingCamera = false
+    }
+  }
+
   private async startCamera(): Promise<void> {
+    const facing = this.facingMode
     // High ideal sizes make many laptop webcams switch into a cropped
     // sensor mode (looks zoomed-in). Phones keep the 4K preference.
     const attempts: MediaStreamConstraints[] = CameraARViewer.isMobileUa()
       ? [
           {
             video: {
-              facingMode: { ideal: 'environment' },
+              facingMode: { exact: facing },
               width: { ideal: 3840 },
               height: { ideal: 2160 },
             },
@@ -177,14 +214,18 @@ export class CameraARViewer {
           },
           {
             video: {
-              facingMode: { ideal: 'environment' },
+              facingMode: { exact: facing },
               width: { ideal: 1920 },
               height: { ideal: 1080 },
             },
             audio: false,
           },
           {
-            video: { facingMode: { ideal: 'environment' } },
+            video: { facingMode: { exact: facing } },
+            audio: false,
+          },
+          {
+            video: { facingMode: { ideal: facing } },
             audio: false,
           },
         ]
@@ -219,7 +260,7 @@ export class CameraARViewer {
     }
 
     await CameraARViewer.preferWidestFov(stream)
-    this.mirrorPreview = CameraARViewer.shouldMirrorPreview(stream)
+    this.applyMirrorFromStream(stream)
     this.video.srcObject = stream
     await this.video.play()
 
@@ -238,6 +279,14 @@ export class CameraARViewer {
         { once: true },
       )
     })
+  }
+
+  private releaseStream(): void {
+    const stream = this.video.srcObject
+    if (stream instanceof MediaStream) {
+      stream.getTracks().forEach((track) => track.stop())
+    }
+    this.video.srcObject = null
   }
 
   private static isMobileUa(): boolean {
@@ -262,14 +311,20 @@ export class CameraARViewer {
   }
 
   /**
-   * Rear phones stay unmirrored. Laptop / front cameras are mirrored —
-   * browsers often still report facingMode "environment" on desktops
-   * after an ideal:environment request, so desktop always mirrors.
+   * Rear cameras stay unmirrored (room text readable). Front / selfie and
+   * laptop webcams are mirrored. Desktop always mirrors.
    */
-  private static shouldMirrorPreview(stream: MediaStream): boolean {
-    if (!CameraARViewer.isMobileUa()) return true
-    const facing = stream.getVideoTracks()[0]?.getSettings().facingMode
-    return facing !== 'environment'
+  private applyMirrorFromStream(stream: MediaStream): void {
+    if (!CameraARViewer.isMobileUa()) {
+      this.mirrorPreview = true
+      return
+    }
+    const reported = stream.getVideoTracks()[0]?.getSettings().facingMode
+    const facing = reported === 'user' || reported === 'environment'
+      ? reported
+      : this.facingMode
+    this.facingMode = facing
+    this.mirrorPreview = facing === 'user'
   }
 
   private fitVideo(): void {
@@ -398,7 +453,7 @@ export class CameraARViewer {
 
   /**
    * Freeze the current live video frame immediately (WYSIWYG).
-   * Model stays interactive on top of the photo.
+   * Model stays locked in place for save/export.
    */
   async takePhoto(): Promise<void> {
     const { width: viewportWidth, height: viewportHeight } = this.getViewportSize()
@@ -415,6 +470,9 @@ export class CameraARViewer {
     this.frozenBg.classList.remove('hidden')
     this.video.classList.add('hidden')
     this.frozen = true
+    this.pointers.clear()
+    this.gesture = 'none'
+    this.setCanvasCursor('')
     this.syncMediaState()
   }
 
@@ -533,11 +591,7 @@ export class CameraARViewer {
     this.stopRenderLoop()
     this.setCameraTracksEnabled(false)
     this.clearCurrentModel()
-    const stream = this.video.srcObject
-    if (stream instanceof MediaStream) {
-      stream.getTracks().forEach((track) => track.stop())
-    }
-    this.video.srcObject = null
+    this.releaseStream()
     this.renderer.dispose()
     this.video.remove()
     this.frozenBg.remove()
@@ -647,6 +701,7 @@ export class CameraARViewer {
 
   private onPointerDown = (event: PointerEvent): void => {
     event.preventDefault()
+    if (this.frozen) return
     this.canvas.setPointerCapture(event.pointerId)
     this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
 
@@ -665,6 +720,7 @@ export class CameraARViewer {
   }
 
   private onPointerMove = (event: PointerEvent): void => {
+    if (this.frozen) return
     if (!this.pointers.has(event.pointerId)) return
     this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
 
@@ -728,6 +784,10 @@ export class CameraARViewer {
 
   private onHoverMove = (event: PointerEvent): void => {
     if (!CameraARViewer.supportsHoverCursor()) return
+    if (this.frozen) {
+      this.setCanvasCursor('')
+      return
+    }
     if (this.gesture !== 'none') {
       this.setCanvasCursor('grabbing')
       return
@@ -766,13 +826,14 @@ export class CameraARViewer {
   }
 
   private onDoubleClick = (event: MouseEvent): void => {
-    if (this.interactionMode !== 'rotate') return
+    if (this.frozen || this.interactionMode !== 'rotate') return
     event.preventDefault()
     this.resetModelRotation()
   }
 
   private onWheel = (event: WheelEvent): void => {
     event.preventDefault()
+    if (this.frozen) return
     const factor = event.deltaY > 0 ? 0.92 : 1.08
     const next = this.modelGroup.scale.x * factor
     this.modelGroup.scale.setScalar(THREE.MathUtils.clamp(next, 0.2, 4))

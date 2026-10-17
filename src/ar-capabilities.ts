@@ -46,34 +46,3 @@ export async function detectARMode(hasUsdz: boolean): Promise<ARMode> {
 }
 
 export type CapturePhase = 'live' | 'photo'
-
-export function hintForMode(
-  _activeView: 'portal' | 'webxr',
-  roomCapability: ARMode,
-  placed = false,
-  capturePhase: CapturePhase = 'live',
-): string {
-  if (capturePhase === 'photo') {
-    if (isRestrictedInAppBrowser()) {
-      return 'Speichern: teilen oder lange drücken → Bild sichern'
-    }
-    return 'Ziehen oder Drehen · Doppelklick: Rotation zurück · Speichern'
-  }
-
-  if (_activeView === 'webxr') {
-    const base = placed
-      ? 'Gehe herum · Objekt steht im Raum'
-      : 'Bewege das Gerät · Tippe zum Platzieren'
-    return `${base} · Shutter: Foto`
-  }
-
-  if (roomCapability === 'quick-look') {
-    return 'Modell wählen · dann „In den Raum platzieren“ (Safari)'
-  }
-
-  if (roomCapability === 'webxr') {
-    return 'Raum-AR verfügbar · Button oben oder neu starten · Shutter: Foto'
-  }
-
-  return 'Ziehen oder Drehen · Doppelklick setzt Rotation zurück · Shutter: Foto'
-}

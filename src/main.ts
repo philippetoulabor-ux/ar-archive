@@ -2,7 +2,6 @@ import './style.css'
 import { asset } from './assets.ts'
 import {
   detectARMode,
-  hintForMode,
   isRestrictedInAppBrowser,
   type ARMode,
   type CapturePhase,
@@ -10,10 +9,7 @@ import {
 import { CameraARViewer, type InteractionMode } from './camera-ar.ts'
 import { saveImageBlob } from './capture.ts'
 import { models, type ModelAsset } from './models.ts'
-import {
-  supportsQuickLookLink,
-  updateQuickLookAnchor,
-} from './quick-look.ts'
+import { updateQuickLookAnchor } from './quick-look.ts'
 import { RoomARViewer } from './room-ar-viewer.ts'
 
 const app = document.querySelector<HTMLDivElement>('#app')!
@@ -24,10 +20,6 @@ let portalViewer: CameraARViewer | null = null
 let roomViewer: RoomARViewer | null = null
 let started = false
 let capturePhase: CapturePhase = 'live'
-let gestureHintDismissed = false
-let gestureHintTimer: ReturnType<typeof setTimeout> | null = null
-
-const GESTURE_HINT_DURATION_MS = 4000
 
 app.innerHTML = `
   <div class="ar-app" id="ar-app">
@@ -45,7 +37,7 @@ app.innerHTML = `
 
     <div class="hud">
       <div class="hud-top">
-        <p class="hud-label">Modell</p>
+        <p class="hud-label">Model</p>
         <h1 class="hud-title" id="model-title">${models[0]!.name}</h1>
         <a
           rel="ar"
@@ -85,26 +77,54 @@ app.innerHTML = `
           .join('')}
       </div>
 
-      <div class="transform-mode hidden" id="transform-mode" role="group" aria-label="Objekt steuern">
-        <button
-          type="button"
-          class="transform-mode-btn active"
-          data-mode="move"
-          aria-pressed="true"
-        >
-          Ziehen
-        </button>
-        <button
-          type="button"
-          class="transform-mode-btn"
-          data-mode="rotate"
-          aria-pressed="false"
-        >
-          Drehen
-        </button>
+      <div class="transform-controls hidden" id="transform-controls">
+        <p class="zoom-hint" id="zoom-hint">Scroll to zoom</p>
+        <div class="transform-mode" id="transform-mode" role="group" aria-label="Transform mode">
+          <button
+            type="button"
+            class="transform-mode-btn active"
+            data-mode="move"
+            aria-pressed="true"
+          >
+            Move
+          </button>
+          <button
+            type="button"
+            class="transform-mode-btn"
+            data-mode="rotate"
+            aria-pressed="false"
+          >
+            Rotate
+          </button>
+        </div>
       </div>
 
       <button type="button" class="shutter-btn hidden" id="shutter-btn" aria-label="Aufnahme"></button>
+      <button
+        type="button"
+        class="camera-flip-btn hidden"
+        id="camera-flip-btn"
+        aria-label="Switch camera"
+      >
+        <svg class="camera-flip-icon" viewBox="0 0 24 24" aria-hidden="true">
+          <path
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            d="M16 4h2a2 2 0 0 1 2 2v2M8 20H6a2 2 0 0 1-2-2v-2M20 8v2a2 2 0 0 1-2 2h-2M4 16v-2a2 2 0 0 1 2-2h2"
+          />
+          <circle
+            cx="12"
+            cy="12"
+            r="3.25"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="1.8"
+          />
+        </svg>
+      </button>
       <div class="compose-actions hidden" id="compose-actions">
         <button type="button" class="compose-save-btn" id="compose-save-btn">SAVE</button>
         <button type="button" class="compose-close-btn" id="compose-close-btn" aria-label="Zurück">
@@ -130,7 +150,6 @@ app.innerHTML = `
       <button type="button" class="save-fallback-close" id="save-fallback-close">Schließen</button>
     </div>
 
-    <p class="gesture-hint hidden" id="gesture-hint">Ziehen oder Drehen wählen</p>
   </div>
 `
 
@@ -145,12 +164,24 @@ const modelTitle = document.querySelector('#model-title')!
 const hudQuickLook = document.querySelector('#hud-quick-look') as HTMLAnchorElement
 const hudWebXR = document.querySelector('#hud-webxr') as HTMLButtonElement
 const modelBar = document.querySelector('#model-bar')!
-const gestureHint = document.querySelector('#gesture-hint')!
+const transformControls = document.querySelector(
+  '#transform-controls',
+) as HTMLElement
+const zoomHint = document.querySelector('#zoom-hint')!
 const transformMode = document.querySelector('#transform-mode') as HTMLElement
 const transformModeBtns = [
   ...transformMode.querySelectorAll<HTMLButtonElement>('.transform-mode-btn'),
 ]
+
+zoomHint.textContent = window.matchMedia(
+  '(hover: hover) and (pointer: fine)',
+).matches
+  ? 'Scroll to zoom'
+  : 'Pinch to zoom'
 const shutterBtn = document.querySelector('#shutter-btn') as HTMLButtonElement
+const cameraFlipBtn = document.querySelector(
+  '#camera-flip-btn',
+) as HTMLButtonElement
 const composeActions = document.querySelector('#compose-actions') as HTMLElement
 const composeSaveBtn = document.querySelector('#compose-save-btn') as HTMLButtonElement
 const composeCloseBtn = document.querySelector('#compose-close-btn') as HTMLButtonElement
@@ -205,15 +236,6 @@ function resetCaptureState(): void {
   capturePhase = 'live'
 }
 
-function isLikelyDevHost(): boolean {
-  const host = location.hostname
-  return (
-    host === 'localhost' ||
-    host.endsWith('.local') ||
-    /^\d+\.\d+\.\d+\.\d+$/.test(host)
-  )
-}
-
 function setLoading(visible: boolean, text?: string, percent?: number): void {
   loadingEl.classList.toggle('hidden', !visible)
   if (text) loadingText.textContent = text
@@ -230,58 +252,22 @@ function updateStartSub(): void {
   }
 }
 
-function updateGestureHint(hint: string, force = false): void {
-  if (!started || (gestureHintDismissed && !force)) {
-    gestureHint.classList.add('hidden')
-    return
-  }
-
-  gestureHint.textContent = hint
-  gestureHint.classList.remove('hidden')
-
-  if (!force && !gestureHintTimer) {
-    gestureHintTimer = setTimeout(() => {
-      gestureHintDismissed = true
-      gestureHint.classList.add('hidden')
-      gestureHintTimer = null
-    }, GESTURE_HINT_DURATION_MS)
-  }
-}
-
-function updateUI(placed = false): void {
-  let hint = hintForMode(activeView, roomCapability, placed, capturePhase)
-
-  if (
-    roomCapability === 'quick-look' &&
-    activeView === 'portal' &&
-    isLikelyDevHost()
-  ) {
-    hint +=
-      ' · Quick Look braucht vertrauenswürdiges HTTPS (nicht Dev-Zertifikat)'
-  }
-
-  if (roomCapability === 'quick-look' && !supportsQuickLookLink()) {
-    hint = 'Quick Look nur in Safari (nicht In-App-Browser)'
-  }
-
-  if (
-    capturePhase !== 'photo' &&
-    isRestrictedInAppBrowser() &&
-    !gestureHintDismissed
-  ) {
-    hint += ' · Speichern: Share oder lange drücken'
-  }
-
-  updateGestureHint(hint, capturePhase === 'photo')
-
+function updateUI(_placed = false): void {
   const viewerActive = Boolean(portalViewer || roomViewer)
   const showShutter = viewerActive && started && capturePhase === 'live'
   const showCompose = viewerActive && started && capturePhase === 'photo'
-  const showTransformMode =
-    Boolean(portalViewer) && started && activeView === 'portal'
+  const showLivePortalControls =
+    Boolean(portalViewer) &&
+    started &&
+    activeView === 'portal' &&
+    capturePhase === 'live'
+  const showCameraFlip =
+    showLivePortalControls && (portalViewer?.canFlipCamera() ?? false)
   shutterBtn.classList.toggle('hidden', !showShutter)
+  cameraFlipBtn.classList.toggle('hidden', !showCameraFlip)
   composeActions.classList.toggle('hidden', !showCompose)
-  transformMode.classList.toggle('hidden', !showTransformMode)
+  transformControls.classList.toggle('hidden', !showLivePortalControls)
+  modelBar.classList.toggle('hidden', capturePhase === 'photo')
 
   hudQuickLook.classList.add('hidden')
   hudWebXR.classList.add('hidden')
@@ -457,6 +443,10 @@ shutterBtn.addEventListener('click', () => {
   void onShutterClick()
 })
 
+cameraFlipBtn.addEventListener('click', () => {
+  void onCameraFlip()
+})
+
 composeSaveBtn.addEventListener('click', () => {
   void onComposeSave()
 })
@@ -469,6 +459,19 @@ composeCloseBtn.addEventListener('click', () => {
 saveFallbackClose.addEventListener('click', () => {
   closeSaveFallback()
 })
+
+async function onCameraFlip(): Promise<void> {
+  if (!portalViewer?.canFlipCamera()) return
+  cameraFlipBtn.disabled = true
+  try {
+    await portalViewer.flipCamera()
+    updateUI()
+  } catch (error) {
+    console.error('Camera flip failed:', error)
+  } finally {
+    cameraFlipBtn.disabled = false
+  }
+}
 
 async function onShutterClick(): Promise<void> {
   const viewer = getActiveViewer()

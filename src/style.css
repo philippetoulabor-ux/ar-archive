@@ -243,6 +243,10 @@ button {
   scrollbar-width: none;
 }
 
+.model-bar.hidden {
+  display: none;
+}
+
 .model-bar::-webkit-scrollbar {
   display: none;
 }
@@ -319,11 +323,58 @@ button {
   cursor: wait;
 }
 
-.transform-mode {
+.camera-flip-btn {
+  position: absolute;
+  right: 1.25rem;
+  bottom: calc(max(1rem, env(safe-area-inset-bottom)) + 6.15rem);
+  z-index: 11;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 2.85rem;
+  height: 2.85rem;
+  padding: 0;
+  border: 1px solid rgba(255, 255, 255, 0.28);
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.45);
+  color: #fff;
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  pointer-events: auto;
+}
+
+.camera-flip-btn.hidden {
+  display: none;
+}
+
+.camera-flip-btn:disabled {
+  opacity: 0.55;
+  cursor: wait;
+}
+
+.camera-flip-icon {
+  width: 1.35rem;
+  height: 1.35rem;
+  display: block;
+}
+
+.transform-controls {
   position: absolute;
   left: 1rem;
   bottom: calc(max(1rem, env(safe-area-inset-bottom)) + 5.75rem);
   z-index: 11;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 0.45rem;
+  pointer-events: none;
+}
+
+.transform-controls.hidden {
+  display: none;
+}
+
+.transform-mode {
   display: flex;
   align-items: stretch;
   padding: 0.2rem;
@@ -334,10 +385,6 @@ button {
   backdrop-filter: blur(10px);
   -webkit-backdrop-filter: blur(10px);
   pointer-events: auto;
-}
-
-.transform-mode.hidden {
-  display: none;
 }
 
 .transform-mode-btn {
@@ -430,29 +477,16 @@ button {
   }
 }
 
-.gesture-hint {
-  position: absolute;
-  bottom: calc(max(1rem, env(safe-area-inset-bottom)) + 10.25rem);
-  left: 50%;
-  transform: translateX(-50%);
-  z-index: 9;
+.zoom-hint {
   margin: 0;
-  padding: 0.35rem 0.75rem;
-  border-radius: 999px;
+  padding: 0 0.35rem;
   font-size: 0.75rem;
+  font-weight: 500;
   color: var(--text-muted);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.7);
+  white-space: nowrap;
+  line-height: 1;
   pointer-events: none;
-  background: rgba(0, 0, 0, 0.35);
-  white-space: normal;
-  text-align: center;
-  max-width: min(92vw, 22rem);
-  opacity: 1;
-  transition: opacity 0.4s ease;
-}
-
-.gesture-hint.hidden {
-  display: none;
-  opacity: 0;
 }
 
 .save-fallback {
