@@ -12,6 +12,8 @@ import {
 import { disposeObject3D } from './dispose-object3d.ts'
 import { patchArMaterials } from './material-patches.ts'
 
+export type InteractionMode = 'move' | 'rotate'
+
 export interface CameraAROptions {
   container: HTMLElement
   onModelLoaded?: () => void
@@ -42,10 +44,14 @@ export class CameraARViewer {
   private maxCaptureEdge: number
 
   private pointers = new Map<number, { x: number; y: number }>()
-  /** Single-finger / primary-button: free tumble. Two-finger: pan + pinch. */
-  private gesture: 'none' | 'rotate' | 'pinch' = 'none'
+  /** Active drag: move / rotate from mode, or pinch-to-scale. */
+  private gesture: 'none' | 'move' | 'rotate' | 'pinch' = 'none'
+  private interactionMode: InteractionMode = 'move'
   private lastPointer = { x: 0, y: 0 }
-  private pinchStart = {
+  private dragMoved = false
+  private lastTapAt = 0
+  private lastTapPos = { x: 0, y: 0 }
+  private dragStart = {
     distance: 0,
     scale: 1,
     midX: 0,
@@ -57,13 +63,20 @@ export class CameraARViewer {
   private readonly _qPitch = new THREE.Quaternion()
   private readonly _axisX = new THREE.Vector3(1, 0, 0)
   private readonly _axisY = new THREE.Vector3(0, 1, 0)
+  private readonly raycaster = new THREE.Raycaster()
+  private readonly pointerNdc = new THREE.Vector2()
   private renderRunning = false
   private cameraTracksEnabled = true
+  /** Front-facing / laptop webcam: mirror preview so left/right match a mirror. */
+  private mirrorPreview = false
 
   /** Radians of rotation per full viewport width/height of drag. */
   private static readonly ROTATE_SPEED = Math.PI * 1.35
-  /** World units of pan per full viewport width/height of two-finger drag. */
+  /** World units of pan per full viewport width/height of drag. */
   private static readonly PAN_SPEED = 2.5
+  private static readonly DOUBLE_TAP_MS = 320
+  private static readonly DOUBLE_TAP_PX = 28
+  private static readonly DRAG_SLOP_PX = 6
 
   constructor(options: CameraAROptions) {
     this.container = options.container
@@ -139,29 +152,57 @@ export class CameraARViewer {
     this.syncMediaState()
   }
 
+  getInteractionMode(): InteractionMode {
+    return this.interactionMode
+  }
+
+  setInteractionMode(mode: InteractionMode): void {
+    this.interactionMode = mode
+    this.pointers.clear()
+    this.gesture = 'none'
+  }
+
   private async startCamera(): Promise<void> {
-    const attempts: MediaStreamConstraints[] = [
-      {
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 3840 },
-          height: { ideal: 2160 },
-        },
-        audio: false,
-      },
-      {
-        video: {
-          facingMode: { ideal: 'environment' },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 },
-        },
-        audio: false,
-      },
-      {
-        video: { facingMode: { ideal: 'environment' } },
-        audio: false,
-      },
-    ]
+    // High ideal sizes make many laptop webcams switch into a cropped
+    // sensor mode (looks zoomed-in). Phones keep the 4K preference.
+    const attempts: MediaStreamConstraints[] = CameraARViewer.isMobileUa()
+      ? [
+          {
+            video: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 3840 },
+              height: { ideal: 2160 },
+            },
+            audio: false,
+          },
+          {
+            video: {
+              facingMode: { ideal: 'environment' },
+              width: { ideal: 1920 },
+              height: { ideal: 1080 },
+            },
+            audio: false,
+          },
+          {
+            video: { facingMode: { ideal: 'environment' } },
+            audio: false,
+          },
+        ]
+      : [
+          {
+            video: {
+              facingMode: { ideal: 'user' },
+              width: { ideal: 1280 },
+              height: { ideal: 720 },
+            },
+            audio: false,
+          },
+          {
+            video: { facingMode: { ideal: 'user' } },
+            audio: false,
+          },
+          { video: true, audio: false },
+        ]
 
     let stream: MediaStream | null = null
     for (const constraints of attempts) {
@@ -177,6 +218,8 @@ export class CameraARViewer {
       throw new Error('Kamera nicht verfügbar')
     }
 
+    await CameraARViewer.preferWidestFov(stream)
+    this.mirrorPreview = CameraARViewer.shouldMirrorPreview(stream)
     this.video.srcObject = stream
     await this.video.play()
 
@@ -197,10 +240,42 @@ export class CameraARViewer {
     })
   }
 
+  private static isMobileUa(): boolean {
+    return /Mobi|Android|iPhone|iPad/i.test(navigator.userAgent)
+  }
+
+  /** Zoom out when the track exposes a controllable zoom (common on Continuity Camera). */
+  private static async preferWidestFov(stream: MediaStream): Promise<void> {
+    const track = stream.getVideoTracks()[0]
+    if (!track || typeof track.getCapabilities !== 'function') return
+    const caps = track.getCapabilities() as MediaTrackCapabilities & {
+      zoom?: { min: number; max: number; step?: number }
+    }
+    if (!caps.zoom || typeof caps.zoom.min !== 'number') return
+    try {
+      await track.applyConstraints({
+        advanced: [{ zoom: caps.zoom.min } as MediaTrackConstraintSet],
+      })
+    } catch {
+      /* zoom not applyable */
+    }
+  }
+
+  /**
+   * Rear phones stay unmirrored. Laptop / front cameras are mirrored —
+   * browsers often still report facingMode "environment" on desktops
+   * after an ideal:environment request, so desktop always mirrors.
+   */
+  private static shouldMirrorPreview(stream: MediaStream): boolean {
+    if (!CameraARViewer.isMobileUa()) return true
+    const facing = stream.getVideoTracks()[0]?.getSettings().facingMode
+    return facing !== 'environment'
+  }
+
   private fitVideo(): void {
     this.video.style.objectFit = 'cover'
     this.video.style.objectPosition = 'center'
-    this.video.style.transform = 'none'
+    this.video.style.transform = this.mirrorPreview ? 'scaleX(-1)' : 'none'
   }
 
   loadModel(url: string): void {
@@ -331,7 +406,11 @@ export class CameraARViewer {
       throw new Error('Viewport nicht bereit')
     }
 
-    const frame = captureVideoFrameSync(this.video, this.maxCaptureEdge)
+    const frame = captureVideoFrameSync(
+      this.video,
+      this.maxCaptureEdge,
+      this.mirrorPreview,
+    )
     this.setFrozenSource(frame)
     this.frozenBg.classList.remove('hidden')
     this.video.classList.add('hidden')
@@ -468,8 +547,11 @@ export class CameraARViewer {
   private bindEvents(): void {
     this.canvas.addEventListener('pointerdown', this.onPointerDown)
     this.canvas.addEventListener('pointermove', this.onPointerMove)
+    this.canvas.addEventListener('pointermove', this.onHoverMove)
     this.canvas.addEventListener('pointerup', this.onPointerUp)
     this.canvas.addEventListener('pointercancel', this.onPointerUp)
+    this.canvas.addEventListener('pointerleave', this.onPointerLeave)
+    this.canvas.addEventListener('dblclick', this.onDoubleClick)
     this.canvas.addEventListener('wheel', this.onWheel, { passive: false })
     this.canvas.addEventListener('contextmenu', this.onContextMenu)
   }
@@ -477,12 +559,16 @@ export class CameraARViewer {
   private unbindEvents(): void {
     this.canvas.removeEventListener('pointerdown', this.onPointerDown)
     this.canvas.removeEventListener('pointermove', this.onPointerMove)
+    this.canvas.removeEventListener('pointermove', this.onHoverMove)
     this.canvas.removeEventListener('pointerup', this.onPointerUp)
     this.canvas.removeEventListener('pointercancel', this.onPointerUp)
+    this.canvas.removeEventListener('pointerleave', this.onPointerLeave)
+    this.canvas.removeEventListener('dblclick', this.onDoubleClick)
     this.canvas.removeEventListener('wheel', this.onWheel)
     this.canvas.removeEventListener('contextmenu', this.onContextMenu)
     this.pointers.clear()
     this.gesture = 'none'
+    this.canvas.style.cursor = ''
   }
 
   private applyDefaultModelPosition(): void {
@@ -565,21 +651,16 @@ export class CameraARViewer {
     this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
 
     if (this.pointers.size === 1) {
-      // Secondary / middle button: pan with one pointer (desktop).
-      if (event.button === 1 || event.button === 2 || event.shiftKey) {
-        this.beginPinchGesture()
-        this.pinchStart.midX = event.clientX
-        this.pinchStart.midY = event.clientY
-        this.pinchStart.distance = 0
-      } else {
-        this.gesture = 'rotate'
-        this.lastPointer = { x: event.clientX, y: event.clientY }
-      }
+      this.dragMoved = false
+      this.beginPrimaryGesture(event.clientX, event.clientY)
+      this.setCanvasCursor('grabbing')
       return
     }
 
     if (this.pointers.size === 2) {
+      this.dragMoved = true
       this.beginPinchGesture()
+      this.setCanvasCursor('grabbing')
     }
   }
 
@@ -587,11 +668,31 @@ export class CameraARViewer {
     if (!this.pointers.has(event.pointerId)) return
     this.pointers.set(event.pointerId, { x: event.clientX, y: event.clientY })
 
+    if (this.gesture === 'move' && this.pointers.size === 1) {
+      const mid = this.getPointerMidpoint()
+      if (
+        Math.hypot(mid.x - this.dragStart.midX, mid.y - this.dragStart.midY) >
+        CameraARViewer.DRAG_SLOP_PX
+      ) {
+        this.dragMoved = true
+      }
+      this.updateMoveGesture()
+      return
+    }
+
     if (this.gesture === 'rotate' && this.pointers.size === 1) {
       const width = Math.max(1, this.container.clientWidth)
       const height = Math.max(1, this.container.clientHeight)
       const dx = event.clientX - this.lastPointer.x
       const dy = event.clientY - this.lastPointer.y
+      if (
+        Math.hypot(
+          event.clientX - this.dragStart.midX,
+          event.clientY - this.dragStart.midY,
+        ) > CameraARViewer.DRAG_SLOP_PX
+      ) {
+        this.dragMoved = true
+      }
       this.lastPointer = { x: event.clientX, y: event.clientY }
       this.tumbleModel(
         (dx / width) * CameraARViewer.ROTATE_SPEED,
@@ -600,7 +701,7 @@ export class CameraARViewer {
       return
     }
 
-    if (this.gesture === 'pinch' && this.pointers.size >= 1) {
+    if (this.gesture === 'pinch' && this.pointers.size >= 2) {
       this.updatePinchGesture()
     }
   }
@@ -610,16 +711,64 @@ export class CameraARViewer {
     this.pointers.delete(event.pointerId)
 
     if (this.pointers.size === 0) {
+      const wasTap = !this.dragMoved && this.gesture !== 'pinch'
       this.gesture = 'none'
+      if (wasTap && this.interactionMode === 'rotate') {
+        this.handleRotateTap(event.clientX, event.clientY)
+      }
+      this.updateHoverCursor(event.clientX, event.clientY)
       return
     }
 
     if (this.pointers.size === 1) {
-      // After lifting one finger of a pinch, continue as rotate.
       const remaining = [...this.pointers.values()][0]!
-      this.gesture = 'rotate'
-      this.lastPointer = { x: remaining.x, y: remaining.y }
+      this.beginPrimaryGesture(remaining.x, remaining.y)
     }
+  }
+
+  private onHoverMove = (event: PointerEvent): void => {
+    if (!CameraARViewer.supportsHoverCursor()) return
+    if (this.gesture !== 'none') {
+      this.setCanvasCursor('grabbing')
+      return
+    }
+    this.updateHoverCursor(event.clientX, event.clientY)
+  }
+
+  private onPointerLeave = (): void => {
+    if (this.gesture !== 'none') return
+    this.setCanvasCursor('')
+  }
+
+  private updateHoverCursor(clientX: number, clientY: number): void {
+    if (!CameraARViewer.supportsHoverCursor()) return
+    this.setCanvasCursor(this.hitTestModel(clientX, clientY) ? 'grab' : '')
+  }
+
+  private setCanvasCursor(cursor: string): void {
+    if (!CameraARViewer.supportsHoverCursor()) return
+    this.canvas.style.cursor = cursor
+  }
+
+  private static supportsHoverCursor(): boolean {
+    return window.matchMedia('(hover: hover) and (pointer: fine)').matches
+  }
+
+  private hitTestModel(clientX: number, clientY: number): boolean {
+    if (!this.currentModel) return false
+    const rect = this.canvas.getBoundingClientRect()
+    if (rect.width < 1 || rect.height < 1) return false
+
+    this.pointerNdc.x = ((clientX - rect.left) / rect.width) * 2 - 1
+    this.pointerNdc.y = -((clientY - rect.top) / rect.height) * 2 + 1
+    this.raycaster.setFromCamera(this.pointerNdc, this.camera)
+    return this.raycaster.intersectObject(this.modelGroup, true).length > 0
+  }
+
+  private onDoubleClick = (event: MouseEvent): void => {
+    if (this.interactionMode !== 'rotate') return
+    event.preventDefault()
+    this.resetModelRotation()
   }
 
   private onWheel = (event: WheelEvent): void => {
@@ -631,6 +780,53 @@ export class CameraARViewer {
 
   private onContextMenu = (event: Event): void => {
     event.preventDefault()
+  }
+
+  private beginPrimaryGesture(x: number, y: number): void {
+    this.lastPointer = { x, y }
+    this.dragStart = {
+      distance: 0,
+      scale: this.modelGroup.scale.x,
+      midX: x,
+      midY: y,
+      modelX: this.modelGroup.position.x,
+      modelY: this.modelGroup.position.y,
+    }
+    this.gesture = this.interactionMode === 'move' ? 'move' : 'rotate'
+  }
+
+  private handleRotateTap(x: number, y: number): void {
+    const now = performance.now()
+    const near =
+      Math.hypot(x - this.lastTapPos.x, y - this.lastTapPos.y) <=
+      CameraARViewer.DOUBLE_TAP_PX
+    if (
+      now - this.lastTapAt <= CameraARViewer.DOUBLE_TAP_MS &&
+      near
+    ) {
+      this.resetModelRotation()
+      this.lastTapAt = 0
+      return
+    }
+    this.lastTapAt = now
+    this.lastTapPos = { x, y }
+  }
+
+  private resetModelRotation(): void {
+    this.modelGroup.quaternion.identity()
+    this.modelGroup.rotation.set(0, 0, 0)
+  }
+
+  private updateMoveGesture(): void {
+    const width = Math.max(1, this.container.clientWidth)
+    const height = Math.max(1, this.container.clientHeight)
+    const mid = this.getPointerMidpoint()
+    this.modelGroup.position.x =
+      this.dragStart.modelX +
+      ((mid.x - this.dragStart.midX) / width) * CameraARViewer.PAN_SPEED
+    this.modelGroup.position.y =
+      this.dragStart.modelY -
+      ((mid.y - this.dragStart.midY) / height) * CameraARViewer.PAN_SPEED
   }
 
   /**
@@ -646,7 +842,7 @@ export class CameraARViewer {
   private beginPinchGesture(): void {
     this.gesture = 'pinch'
     const mid = this.getPointerMidpoint()
-    this.pinchStart = {
+    this.dragStart = {
       distance: this.getPinchDistance(),
       scale: this.modelGroup.scale.x,
       midX: mid.x,
@@ -657,21 +853,9 @@ export class CameraARViewer {
   }
 
   private updatePinchGesture(): void {
-    const width = Math.max(1, this.container.clientWidth)
-    const height = Math.max(1, this.container.clientHeight)
-    const mid = this.getPointerMidpoint()
-
-    this.modelGroup.position.x =
-      this.pinchStart.modelX +
-      ((mid.x - this.pinchStart.midX) / width) * CameraARViewer.PAN_SPEED
-    this.modelGroup.position.y =
-      this.pinchStart.modelY -
-      ((mid.y - this.pinchStart.midY) / height) * CameraARViewer.PAN_SPEED
-
     const distance = this.getPinchDistance()
-    if (this.pinchStart.distance > 0 && distance > 0) {
-      const scale =
-        this.pinchStart.scale * (distance / this.pinchStart.distance)
+    if (this.dragStart.distance > 0 && distance > 0) {
+      const scale = this.dragStart.scale * (distance / this.dragStart.distance)
       this.modelGroup.scale.setScalar(THREE.MathUtils.clamp(scale, 0.2, 4))
     }
   }

@@ -7,7 +7,7 @@ import {
   type ARMode,
   type CapturePhase,
 } from './ar-capabilities.ts'
-import { CameraARViewer } from './camera-ar.ts'
+import { CameraARViewer, type InteractionMode } from './camera-ar.ts'
 import { saveImageBlob } from './capture.ts'
 import { models, type ModelAsset } from './models.ts'
 import {
@@ -85,6 +85,25 @@ app.innerHTML = `
           .join('')}
       </div>
 
+      <div class="transform-mode hidden" id="transform-mode" role="group" aria-label="Objekt steuern">
+        <button
+          type="button"
+          class="transform-mode-btn active"
+          data-mode="move"
+          aria-pressed="true"
+        >
+          Ziehen
+        </button>
+        <button
+          type="button"
+          class="transform-mode-btn"
+          data-mode="rotate"
+          aria-pressed="false"
+        >
+          Drehen
+        </button>
+      </div>
+
       <button type="button" class="shutter-btn hidden" id="shutter-btn" aria-label="Aufnahme"></button>
       <div class="compose-actions hidden" id="compose-actions">
         <button type="button" class="compose-save-btn" id="compose-save-btn">SAVE</button>
@@ -111,7 +130,7 @@ app.innerHTML = `
       <button type="button" class="save-fallback-close" id="save-fallback-close">Schließen</button>
     </div>
 
-    <p class="gesture-hint hidden" id="gesture-hint">Drehen · Zwei Finger verschieben</p>
+    <p class="gesture-hint hidden" id="gesture-hint">Ziehen oder Drehen wählen</p>
   </div>
 `
 
@@ -127,10 +146,26 @@ const hudQuickLook = document.querySelector('#hud-quick-look') as HTMLAnchorElem
 const hudWebXR = document.querySelector('#hud-webxr') as HTMLButtonElement
 const modelBar = document.querySelector('#model-bar')!
 const gestureHint = document.querySelector('#gesture-hint')!
+const transformMode = document.querySelector('#transform-mode') as HTMLElement
+const transformModeBtns = [
+  ...transformMode.querySelectorAll<HTMLButtonElement>('.transform-mode-btn'),
+]
 const shutterBtn = document.querySelector('#shutter-btn') as HTMLButtonElement
 const composeActions = document.querySelector('#compose-actions') as HTMLElement
 const composeSaveBtn = document.querySelector('#compose-save-btn') as HTMLButtonElement
 const composeCloseBtn = document.querySelector('#compose-close-btn') as HTMLButtonElement
+
+let interactionMode: InteractionMode = 'move'
+
+function setInteractionMode(mode: InteractionMode): void {
+  interactionMode = mode
+  portalViewer?.setInteractionMode(mode)
+  for (const btn of transformModeBtns) {
+    const active = btn.dataset.mode === mode
+    btn.classList.toggle('active', active)
+    btn.setAttribute('aria-pressed', active ? 'true' : 'false')
+  }
+}
 const shutterFlash = document.querySelector('#shutter-flash') as HTMLElement
 const saveFallback = document.querySelector('#save-fallback') as HTMLElement
 const saveFallbackImg = document.querySelector('#save-fallback-img') as HTMLImageElement
@@ -242,8 +277,11 @@ function updateUI(placed = false): void {
   const viewerActive = Boolean(portalViewer || roomViewer)
   const showShutter = viewerActive && started && capturePhase === 'live'
   const showCompose = viewerActive && started && capturePhase === 'photo'
+  const showTransformMode =
+    Boolean(portalViewer) && started && activeView === 'portal'
   shutterBtn.classList.toggle('hidden', !showShutter)
   composeActions.classList.toggle('hidden', !showCompose)
+  transformMode.classList.toggle('hidden', !showTransformMode)
 
   hudQuickLook.classList.add('hidden')
   hudWebXR.classList.add('hidden')
@@ -278,6 +316,7 @@ async function startPortal(): Promise<void> {
   })
 
   await portalViewer.start()
+  portalViewer.setInteractionMode(interactionMode)
   activeView = 'portal'
   updateUI()
   setLoading(true, 'Modell wird geladen…', 0)
@@ -401,6 +440,16 @@ modelBar.addEventListener('click', (event) => {
   const model = models.find((item) => item.id === chip.dataset.modelId)
   if (model && model.id !== activeModel.id) {
     void switchModel(model)
+  }
+})
+
+transformMode.addEventListener('click', (event) => {
+  const btn = (event.target as HTMLElement).closest<HTMLButtonElement>(
+    '.transform-mode-btn',
+  )
+  const mode = btn?.dataset.mode
+  if (mode === 'move' || mode === 'rotate') {
+    setInteractionMode(mode)
   }
 })
 

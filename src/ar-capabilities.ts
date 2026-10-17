@@ -57,7 +57,7 @@ export function hintForMode(
     if (isRestrictedInAppBrowser()) {
       return 'Speichern: teilen oder lange drücken → Bild sichern'
     }
-    return 'Drehen · Zwei Finger: verschieben/skalieren · Speichern'
+    return 'Ziehen oder Drehen · Doppelklick: Rotation zurück · Speichern'
   }
 
   if (_activeView === 'webxr') {
@@ -75,5 +75,5 @@ export function hintForMode(
     return 'Raum-AR verfügbar · Button oben oder neu starten · Shutter: Foto'
   }
 
-  return 'Drehen · Zwei Finger: verschieben/skalieren · Shutter: Foto'
+  return 'Ziehen oder Drehen · Doppelklick setzt Rotation zurück · Shutter: Foto'
 }

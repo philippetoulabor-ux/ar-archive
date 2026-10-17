@@ -226,6 +226,7 @@ export function drawVideoContain(
 export function captureVideoFrameSync(
   video: HTMLVideoElement,
   maxEdge = MAX_CAPTURE_EDGE,
+  mirror = false,
 ): HTMLCanvasElement {
   const width = video.videoWidth
   const height = video.videoHeight
@@ -239,6 +240,10 @@ export function captureVideoFrameSync(
   const ctx = canvas.getContext('2d')
   if (!ctx) {
     throw new Error('Canvas 2D nicht verfügbar')
+  }
+  if (mirror) {
+    ctx.translate(width, 0)
+    ctx.scale(-1, 1)
   }
   ctx.drawImage(video, 0, 0, width, height)
   return scaleCanvasToMaxEdge(canvas, maxEdge)
