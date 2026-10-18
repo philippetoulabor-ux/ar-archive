@@ -323,24 +323,40 @@ button {
   cursor: wait;
 }
 
+/* Matches iOS Camera flip control: frosted disc + flip_camera icon. */
 .camera-flip-btn {
+  --shutter-bottom: calc(max(1rem, env(safe-area-inset-bottom)) + 5.75rem);
+  --shutter-size: 4.25rem;
+  --flip-size: 3rem;
   position: absolute;
-  right: 1.25rem;
-  bottom: calc(max(1rem, env(safe-area-inset-bottom)) + 6.15rem);
+  /* Left of shutter, vertically centered with it (mobile-only control). */
+  left: calc(50% - (var(--shutter-size) / 2) - 1.35rem - var(--flip-size));
+  right: auto;
+  bottom: calc(
+    var(--shutter-bottom) + (var(--shutter-size) - var(--flip-size)) / 2
+  );
   z-index: 11;
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 2.85rem;
-  height: 2.85rem;
+  width: var(--flip-size);
+  height: var(--flip-size);
   padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.28);
+  border: none;
   border-radius: 50%;
-  background: rgba(0, 0, 0, 0.45);
+  background: rgba(255, 255, 255, 0.22);
   color: #fff;
-  backdrop-filter: blur(10px);
-  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(24px) saturate(1.4);
+  -webkit-backdrop-filter: blur(24px) saturate(1.4);
+  box-shadow: none;
+  -webkit-tap-highlight-color: transparent;
   pointer-events: auto;
+  transition: transform 0.12s ease, background 0.12s ease;
+}
+
+.camera-flip-btn:active {
+  transform: scale(0.92);
+  background: rgba(255, 255, 255, 0.32);
 }
 
 .camera-flip-btn.hidden {
@@ -348,20 +364,22 @@ button {
 }
 
 .camera-flip-btn:disabled {
-  opacity: 0.55;
+  opacity: 0.45;
   cursor: wait;
 }
 
 .camera-flip-icon {
-  width: 1.35rem;
-  height: 1.35rem;
+  width: 1.45rem;
+  height: 1.45rem;
   display: block;
 }
 
 .transform-controls {
+  --shutter-bottom: calc(max(1rem, env(safe-area-inset-bottom)) + 5.75rem);
+  --shutter-size: 4.25rem;
   position: absolute;
   left: 1rem;
-  bottom: calc(max(1rem, env(safe-area-inset-bottom)) + 5.75rem);
+  bottom: var(--shutter-bottom);
   z-index: 11;
   display: flex;
   flex-direction: column;
@@ -372,6 +390,16 @@ button {
 
 .transform-controls.hidden {
   display: none;
+}
+
+/* Mobile: Move/Rotate + zoom hint sit right of / above the shutter. */
+@media (hover: none), (pointer: coarse) {
+  .transform-controls {
+    left: auto;
+    right: max(1rem, env(safe-area-inset-right));
+    bottom: calc(var(--shutter-bottom) + var(--shutter-size) + 0.7rem);
+    align-items: flex-end;
+  }
 }
 
 .transform-mode {
